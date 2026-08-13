@@ -6,7 +6,7 @@
 //! `fearless-md5` keeps the standard single-stream MD5 API separate from its
 //! SIMD batch engine. A single MD5 stream has a dependency from one 64-byte
 //! block to the next, while independent messages can occupy independent SIMD
-//! lanes. On x86-64, `fearless_simd` 0.5 therefore maps naturally to 8-way
+//! lanes. On x86-64, `fearless_simd` 0.7 maps naturally to 16-way AVX-512 or 8-way
 //! AVX2 MD5; SSE4.2, AArch64 NEON and WASM SIMD use four lanes.
 //!
 //! MD5 is cryptographically broken and must not be used for signatures,
@@ -73,7 +73,7 @@ impl Md5Many {
 
     /// Return the native number of `u32` SIMD lanes used by this engine.
     ///
-    /// AVX2 is 8 lanes; the current SSE4.2/NEON/WASM paths are 4 lanes.
+    /// AVX-512 is 16 lanes, AVX2 is 8 lanes, and SSE4.2/NEON/WASM use 4 lanes.
     #[must_use]
     pub fn lanes(self) -> usize {
         simd::lanes_with_level(self.level)
@@ -169,6 +169,52 @@ mod tests {
         engine.hash_many(&inputs, &mut outputs);
         for (input, output) in inputs.iter().zip(outputs) {
             assert_eq!(output, reference(input));
+        }
+    }
+
+    #[cfg(any(feature = "std", target_arch = "wasm32"))]
+    #[test]
+    fn many_equal_length_lane_counts_match_reference() {
+        let storage: [[u8; 193]; 16] =
+            core::array::from_fn(|lane| core::array::from_fn(|i| (lane * 37 + i * 13) as u8));
+        let engine = Md5Many::new();
+
+        for active in 2..=16 {
+            let inputs = &storage[..active];
+            let inputs: std::vec::Vec<&[u8]> = inputs.iter().map(<[u8; 193]>::as_slice).collect();
+            let mut outputs = std::vec![[0u8; 16]; active];
+            engine.hash_many(&inputs, &mut outputs);
+            for lane in 0..active {
+                assert_eq!(
+                    outputs[lane],
+                    reference(inputs[lane]),
+                    "active={active}, lane={lane}"
+                );
+            }
+        }
+    }
+
+    #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
+    #[test]
+    fn avx512_padding_boundaries_match_reference() {
+        let engine = Md5Many::new();
+        if engine.lanes() < 16 {
+            return;
+        }
+
+        let storage: [[u8; 129]; 16] =
+            core::array::from_fn(|lane| core::array::from_fn(|i| (lane * 23 + i * 5) as u8));
+        for len in [0, 1, 55, 56, 63, 64, 65, 119, 120, 127, 128, 129] {
+            let inputs: [&[u8]; 16] = core::array::from_fn(|lane| &storage[lane][..len]);
+            let mut outputs = [[0u8; 16]; 16];
+            engine.hash_many(&inputs, &mut outputs);
+            for lane in 0..16 {
+                assert_eq!(
+                    outputs[lane],
+                    reference(inputs[lane]),
+                    "lane={lane}, len={len}"
+                );
+            }
         }
     }
 
