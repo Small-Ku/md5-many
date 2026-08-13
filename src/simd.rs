@@ -2,29 +2,33 @@ use fearless_simd::{Level, Simd, SimdBase, dispatch};
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::{
-    __m256i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256, _mm256_loadu_si256,
+    __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256, _mm256_loadu_si256,
     _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32, _mm256_setzero_si256,
     _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256, _mm256_unpackhi_epi32,
     _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64, _mm256_xor_si256,
+    _mm512_add_epi32, _mm512_loadu_si512, _mm512_permutex2var_epi32, _mm512_rol_epi32,
+    _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512, _mm512_storeu_si512,
+    _mm512_ternarylogic_epi32,
 };
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{
-    __m256i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256, _mm256_loadu_si256,
+    __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256, _mm256_loadu_si256,
     _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32, _mm256_setzero_si256,
     _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256, _mm256_unpackhi_epi32,
     _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64, _mm256_xor_si256,
+    _mm512_add_epi32, _mm512_loadu_si512, _mm512_permutex2var_epi32, _mm512_rol_epi32,
+    _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512, _mm512_storeu_si512,
+    _mm512_ternarylogic_epi32,
 };
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
-use fearless_simd::Avx2;
+use fearless_simd::{Avx2, Avx512};
 
 use crate::consts::{K, S, STATE_INIT};
 use crate::scalar;
 
 /// Maximum lane count supported by the current implementation.
 ///
-/// `fearless_simd` 0.5 uses at most 8 lanes for native `u32` vectors (AVX2).
-/// Keeping this at 16 leaves room for the planned AVX-512 backend without
-/// changing the public batch API.
+/// `fearless_simd` 0.7 uses up to 16 native `u32` lanes with AVX-512.
 const MAX_LANES: usize = 16;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -240,6 +244,240 @@ fearless_simd::kernel!(
             }
         }
         for lane in 0..8 {
+            for word in 0..4 {
+                outputs[lane][word * 4..word * 4 + 4]
+                    .copy_from_slice(&lanes[word][lane].to_le_bytes());
+            }
+        }
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn hash_equal_len_avx512_kernel(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+        debug_assert_eq!(inputs.len(), 16);
+        debug_assert_eq!(outputs.len(), 16);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+        macro_rules! transpose16 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let pair_lo =
+                    _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+                let pair_hi =
+                    _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+                let quad_lo =
+                    _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
+                let quad_hi =
+                    _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+                let oct_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+                let oct_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+                let half_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+                let half_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+
+                let mut s1 = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    let a = rows[pair * 2];
+                    let b = rows[pair * 2 + 1];
+                    s1[pair * 2] = _mm512_permutex2var_epi32(a, pair_lo, b);
+                    s1[pair * 2 + 1] = _mm512_permutex2var_epi32(a, pair_hi, b);
+                }
+
+                let mut s2 = [_mm512_setzero_si512(); 16];
+                for group in 0..4 {
+                    let base = group * 4;
+                    s2[base] = _mm512_permutex2var_epi32(s1[base], quad_lo, s1[base + 2]);
+                    s2[base + 1] = _mm512_permutex2var_epi32(s1[base], quad_hi, s1[base + 2]);
+                    s2[base + 2] = _mm512_permutex2var_epi32(s1[base + 1], quad_lo, s1[base + 3]);
+                    s2[base + 3] = _mm512_permutex2var_epi32(s1[base + 1], quad_hi, s1[base + 3]);
+                }
+
+                let mut s3 = [_mm512_setzero_si512(); 16];
+                for half in 0..2 {
+                    let left = half * 8;
+                    let right = left + 4;
+                    for quarter in 0..4 {
+                        s3[left + quarter * 2] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_lo,
+                            s2[right + quarter],
+                        );
+                        s3[left + quarter * 2 + 1] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_hi,
+                            s2[right + quarter],
+                        );
+                    }
+                }
+
+                let mut out = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    out[pair * 2] = _mm512_permutex2var_epi32(s3[pair], half_lo, s3[8 + pair]);
+                    out[pair * 2 + 1] = _mm512_permutex2var_epi32(s3[pair], half_hi, s3[8 + pair]);
+                }
+                out
+            }};
+        }
+
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut rows = [_mm512_setzero_si512(); 16];
+                for lane in 0..16 {
+                    // SAFETY: each entry is a full 64-byte MD5 block and the
+                    // unaligned AVX-512 load reads exactly those 64 bytes.
+                    rows[lane] = unsafe { _mm512_loadu_si512(blocks[lane].as_ptr().cast()) };
+                }
+                transpose16!(rows)
+            }};
+        }
+
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0xca>($x, $y, $z)
+            };
+            (g, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0xe4>($x, $y, $z)
+            };
+            (h, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0x96>($x, $y, $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0x39>($x, $y, $z)
+            };
+        }
+
+        macro_rules! step {
+            ($which:ident, $a:ident, $b:ident, $c:ident, $d:ident, $words:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mixed = mix!($which, $b, $c, $d);
+                let mut t = _mm512_add_epi32($a, mixed);
+                t = _mm512_add_epi32(t, _mm512_set1_epi32(K[$round] as i32));
+                t = _mm512_add_epi32(t, $words[$word]);
+                $a = _mm512_add_epi32($b, _mm512_rol_epi32::<$shift>(t));
+            }};
+        }
+
+        macro_rules! compress {
+            ($words:expr, $a:ident, $b:ident, $c:ident, $d:ident) => {{
+                let words = $words;
+                let initial = [$a, $b, $c, $d];
+                step!(f, $a, $b, $c, $d, words, 0, 0, 7);
+                step!(f, $d, $a, $b, $c, words, 1, 1, 12);
+                step!(f, $c, $d, $a, $b, words, 2, 2, 17);
+                step!(f, $b, $c, $d, $a, words, 3, 3, 22);
+                step!(f, $a, $b, $c, $d, words, 4, 4, 7);
+                step!(f, $d, $a, $b, $c, words, 5, 5, 12);
+                step!(f, $c, $d, $a, $b, words, 6, 6, 17);
+                step!(f, $b, $c, $d, $a, words, 7, 7, 22);
+                step!(f, $a, $b, $c, $d, words, 8, 8, 7);
+                step!(f, $d, $a, $b, $c, words, 9, 9, 12);
+                step!(f, $c, $d, $a, $b, words, 10, 10, 17);
+                step!(f, $b, $c, $d, $a, words, 11, 11, 22);
+                step!(f, $a, $b, $c, $d, words, 12, 12, 7);
+                step!(f, $d, $a, $b, $c, words, 13, 13, 12);
+                step!(f, $c, $d, $a, $b, words, 14, 14, 17);
+                step!(f, $b, $c, $d, $a, words, 15, 15, 22);
+                step!(g, $a, $b, $c, $d, words, 1, 16, 5);
+                step!(g, $d, $a, $b, $c, words, 6, 17, 9);
+                step!(g, $c, $d, $a, $b, words, 11, 18, 14);
+                step!(g, $b, $c, $d, $a, words, 0, 19, 20);
+                step!(g, $a, $b, $c, $d, words, 5, 20, 5);
+                step!(g, $d, $a, $b, $c, words, 10, 21, 9);
+                step!(g, $c, $d, $a, $b, words, 15, 22, 14);
+                step!(g, $b, $c, $d, $a, words, 4, 23, 20);
+                step!(g, $a, $b, $c, $d, words, 9, 24, 5);
+                step!(g, $d, $a, $b, $c, words, 14, 25, 9);
+                step!(g, $c, $d, $a, $b, words, 3, 26, 14);
+                step!(g, $b, $c, $d, $a, words, 8, 27, 20);
+                step!(g, $a, $b, $c, $d, words, 13, 28, 5);
+                step!(g, $d, $a, $b, $c, words, 2, 29, 9);
+                step!(g, $c, $d, $a, $b, words, 7, 30, 14);
+                step!(g, $b, $c, $d, $a, words, 12, 31, 20);
+                step!(h, $a, $b, $c, $d, words, 5, 32, 4);
+                step!(h, $d, $a, $b, $c, words, 8, 33, 11);
+                step!(h, $c, $d, $a, $b, words, 11, 34, 16);
+                step!(h, $b, $c, $d, $a, words, 14, 35, 23);
+                step!(h, $a, $b, $c, $d, words, 1, 36, 4);
+                step!(h, $d, $a, $b, $c, words, 4, 37, 11);
+                step!(h, $c, $d, $a, $b, words, 7, 38, 16);
+                step!(h, $b, $c, $d, $a, words, 10, 39, 23);
+                step!(h, $a, $b, $c, $d, words, 13, 40, 4);
+                step!(h, $d, $a, $b, $c, words, 0, 41, 11);
+                step!(h, $c, $d, $a, $b, words, 3, 42, 16);
+                step!(h, $b, $c, $d, $a, words, 6, 43, 23);
+                step!(h, $a, $b, $c, $d, words, 9, 44, 4);
+                step!(h, $d, $a, $b, $c, words, 12, 45, 11);
+                step!(h, $c, $d, $a, $b, words, 15, 46, 16);
+                step!(h, $b, $c, $d, $a, words, 2, 47, 23);
+                step!(i, $a, $b, $c, $d, words, 0, 48, 6);
+                step!(i, $d, $a, $b, $c, words, 7, 49, 10);
+                step!(i, $c, $d, $a, $b, words, 14, 50, 15);
+                step!(i, $b, $c, $d, $a, words, 5, 51, 21);
+                step!(i, $a, $b, $c, $d, words, 12, 52, 6);
+                step!(i, $d, $a, $b, $c, words, 3, 53, 10);
+                step!(i, $c, $d, $a, $b, words, 10, 54, 15);
+                step!(i, $b, $c, $d, $a, words, 1, 55, 21);
+                step!(i, $a, $b, $c, $d, words, 8, 56, 6);
+                step!(i, $d, $a, $b, $c, words, 15, 57, 10);
+                step!(i, $c, $d, $a, $b, words, 6, 58, 15);
+                step!(i, $b, $c, $d, $a, words, 13, 59, 21);
+                step!(i, $a, $b, $c, $d, words, 4, 60, 6);
+                step!(i, $d, $a, $b, $c, words, 11, 61, 10);
+                step!(i, $c, $d, $a, $b, words, 2, 62, 15);
+                step!(i, $b, $c, $d, $a, words, 9, 63, 21);
+                $a = _mm512_add_epi32(initial[0], $a);
+                $b = _mm512_add_epi32(initial[1], $b);
+                $c = _mm512_add_epi32(initial[2], $c);
+                $d = _mm512_add_epi32(initial[3], $d);
+            }};
+        }
+
+        let len = inputs[0].len();
+        let mut a = _mm512_set1_epi32(STATE_INIT[0] as i32);
+        let mut b = _mm512_set1_epi32(STATE_INIT[1] as i32);
+        let mut c = _mm512_set1_epi32(STATE_INIT[2] as i32);
+        let mut d = _mm512_set1_epi32(STATE_INIT[3] as i32);
+        let full_blocks = len / 64;
+
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words = load_transposed!(blocks);
+            compress!(words, a, b, c, d);
+        }
+
+        let padded_blocks = padded_blocks_for_len(len);
+        for block_index in full_blocks..padded_blocks {
+            let mut padded = [[0u8; 64]; 16];
+            let base = block_index * 64;
+            for lane in 0..16 {
+                for (byte, slot) in padded[lane].iter_mut().enumerate() {
+                    *slot = padded_byte(inputs[lane], padded_blocks, base + byte);
+                }
+            }
+            let blocks: [&[u8; 64]; 16] = core::array::from_fn(|lane| &padded[lane]);
+            let words = load_transposed!(blocks);
+            compress!(words, a, b, c, d);
+        }
+
+        let states = [a, b, c, d];
+        let mut lanes = [[0u32; 16]; 4];
+        for word in 0..4 {
+            // SAFETY: each destination is exactly sixteen u32 values (64 bytes).
+            unsafe {
+                _mm512_storeu_si512(lanes[word].as_mut_ptr().cast::<__m512i>(), states[word]);
+            }
+        }
+        for lane in 0..16 {
             for word in 0..4 {
                 outputs[lane][word * 4..word * 4 + 4]
                     .copy_from_slice(&lanes[word][lane].to_le_bytes());
@@ -530,6 +768,36 @@ fn hash_mixed_len_chunk<SIMD: Simd>(simd: SIMD, inputs: &[&[u8]], outputs: &mut 
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline(always)]
+fn hash_equal_len_avx2_padded(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((2..=8).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+    debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 8] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 8];
+    hash_equal_len_avx2_kernel(avx2, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_equal_len_avx512_padded(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((9..=16).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+    debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 16] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 16];
+    hash_equal_len_avx512_kernel(avx512, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
 fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
     let mut start = 0;
     while start < inputs.len() {
@@ -537,10 +805,8 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
         let input_chunk = &inputs[start..end];
         let output_chunk = &mut outputs[start..end];
 
-        if input_chunk.len() < 3 {
-            for (input, output) in input_chunk.iter().zip(output_chunk) {
-                *output = scalar::hash(input);
-            }
+        if input_chunk.len() == 1 {
+            output_chunk[0] = scalar::hash(input_chunk[0]);
             start = end;
             continue;
         }
@@ -549,11 +815,55 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
             .first()
             .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
 
-        if same_len && input_chunk.len() == 8 {
-            hash_equal_len_avx2_kernel(avx2, input_chunk, output_chunk);
+        if same_len {
+            hash_equal_len_avx2_padded(avx2, input_chunk, output_chunk);
+        } else if input_chunk.len() < 3 {
+            for (input, output) in input_chunk.iter().zip(output_chunk) {
+                *output = scalar::hash(input);
+            }
         } else {
             dispatch!(avx2.level(), simd => hash_many_inner(simd, input_chunk, output_chunk));
         }
+        start = end;
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    let avx2 = avx512
+        .level()
+        .as_avx2()
+        .expect("AVX-512 feature level includes AVX2");
+
+    let mut start = 0;
+    while start < inputs.len() {
+        let end = core::cmp::min(start + 16, inputs.len());
+        let input_chunk = &inputs[start..end];
+        let output_chunk = &mut outputs[start..end];
+
+        if input_chunk.len() == 1 {
+            output_chunk[0] = scalar::hash(input_chunk[0]);
+            start = end;
+            continue;
+        }
+
+        let same_len = input_chunk
+            .first()
+            .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
+
+        if same_len {
+            if input_chunk.len() <= 8 {
+                hash_equal_len_avx2_padded(avx2, input_chunk, output_chunk);
+            } else {
+                hash_equal_len_avx512_padded(avx512, input_chunk, output_chunk);
+            }
+        } else if input_chunk.len() <= 8 {
+            hash_many_avx2(avx2, input_chunk, output_chunk);
+        } else {
+            dispatch!(avx512.level(), simd => hash_many_inner(simd, input_chunk, output_chunk));
+        }
+
         start = end;
     }
 }
@@ -599,6 +909,12 @@ pub(crate) fn hash_many_with_level(level: Level, inputs: &[&[u8]], outputs: &mut
         "output slice is shorter than input slice"
     );
     let outputs = &mut outputs[..inputs.len()];
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if let Some(avx512) = level.as_avx512() {
+        hash_many_avx512(avx512, inputs, outputs);
+        return;
+    }
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if let Some(avx2) = level.as_avx2() {
