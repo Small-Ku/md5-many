@@ -14,7 +14,7 @@ A standard MD5 digest has a sequential dependency between consecutive 64-byte bl
 
 `md5-many` provides:
 - **Single-message hashing**: standard portable scalar MD5.
-- **Multi-buffer SIMD hashing (`Md5Many`)**: parallel computation across SIMD lanes (8-way on AVX2, 4-way on SSE4.2 / NEON / WASM SIMD128).
+- **Multi-buffer SIMD hashing (`Md5Many`)**: parallel computation across SIMD lanes (16-way on AVX-512, 8-way on AVX2, 4-way on SSE4.2 / NEON / WASM SIMD128).
 - **RustCrypto trait compatibility**: optional `digest` crate integration.
 - **`no_std` support**: lightweight embedded and WebAssembly readiness.
 
@@ -58,7 +58,7 @@ let hasher = Md5Many::new();
 hasher.hash_many(&inputs, &mut outputs);
 ```
 
-`Md5Many` automatically handles both equal-length and mixed-length batches, utilizing specialized SIMD kernels and falling back cleanly on under-filled tail batches.
+`Md5Many` automatically handles both equal-length and mixed-length batches. On x86, equal-length batches use specialized whole-stream kernels: AVX2 pads 2–7 active messages to its optimized 8-way kernel, while AVX-512 uses a 16-way kernel for 9–16 messages and delegates smaller batches to AVX2. The AVX-512 round function uses `VPTERNLOGD` for the MD5 Boolean functions and `VPROLD` for rotates.
 
 ### 3. RustCrypto `digest` Compatibility
 
@@ -101,6 +101,8 @@ cargo bench --bench throughput
 ```
 
 The benchmarks compare single-stream scalar MD5, `RustCrypto `md-5``, RustCrypto `md-5`, multi-buffer SIMD throughput, and SIMD lane-fill efficiencies.
+
+On an AVX-512 host, `Md5Many::lanes()` reports 16 and the lane-fill benchmark makes the AVX2-to-AVX-512 crossover visible. On AVX2-only CPUs such as Zen 3, it reports 8 and uses the same padded 8-way fast path for equal-length batches with two or more active messages.
 
 ---
 

@@ -13,7 +13,7 @@ Developer and AI agent guidance for working in `md5-many`.
 1. **Sequential vs Multi-Buffer Dependency**:
    - Single-stream MD5 has an inherent block-to-block data dependency; vectorizing a single message is limited.
    - Independent messages can execute simultaneously in separate SIMD lanes.
-   - Target native widths: 8 lanes on AVX2, 4 lanes on SSE4.2 / AArch64 NEON / WASM SIMD128, with room for 16-way AVX-512 in the future.
+   - Target native widths: 16 lanes on AVX-512, 8 lanes on AVX2, and 4 lanes on SSE4.2 / AArch64 NEON / WASM SIMD128.
 
 2. **AoS to SoA Transpose**:
    - Equal-length batch inputs are loaded in message-major order (Array of Structures / AoS).
@@ -26,7 +26,7 @@ Developer and AI agent guidance for working in `md5-many`.
 4. **Batch Processing Strategy**:
    - **Equal-length batches**: Fast path with unrolled multi-block loops.
    - **Mixed-length batches**: Lanes are advanced lockstep per 64-byte block; each lane's digest is finalized immediately upon reaching its padded final block.
-   - **Tail / Small batches**: 1-2 lane tails fall back to scalar MD5 to avoid under-filled SIMD overhead.
+   - **Tail / Small batches**: one-message tails use scalar MD5; equal-length 2-7 message batches pad to the AVX2 8-way kernel, and AVX-512 uses its 16-way kernel for 9-16 messages.
 
 ---
 
@@ -37,7 +37,7 @@ md5_many/
 ├── Cargo.toml          # Features: std (default), digest (default), libm
 ├── src/
 │   ├── lib.rs          # Public API: md5, md5_many, Md5Many, RustCrypto exports
-│   ├── simd.rs         # Fearless SIMD dispatch, AVX2 8-way specialization, SoA transposes
+│   ├── simd.rs         # SIMD dispatch, AVX2 8-way + AVX-512 16-way kernels, SoA transposes
 │   ├── scalar.rs       # Portable scalar MD5 implementation & reference logic
 │   ├── block_api.rs    # RustCrypto `digest` trait adapter (Md5Core)
 │   └── consts.rs       # Round constants (K), shifts (S), initial state (IV)
@@ -66,8 +66,8 @@ cargo check
 # no_std with libm and digest
 cargo check --no-default-features --features libm,digest
 
-# Pure core no_std (no default features)
-cargo check --no-default-features
+# no_std without Digest integration
+cargo check --no-default-features --features libm
 ```
 
 ### Benchmarks
@@ -85,7 +85,7 @@ cargo run --example probe
 ## 4. Coding Standards & Invariants
 
 - **Rust Edition & MSRV**: Edition 2024, Rust 1.89+.
-- **`#![no_std]` by default**: Core crate logic must work without `std`. Use conditional `extern crate std;` under `#[cfg(feature = "std")]`.
+- **`#![no_std]` core**: Core crate logic must work without `std`. `fearless_simd` 0.7 requires either `std` or `libm`, so no-std verification enables this crate's `libm` feature. Use conditional `extern crate std;` under `#[cfg(feature = "std")]`.
 - **Unsafe Code Guidelines**:
   - `#![deny(unsafe_op_in_unsafe_fn)]` is enforced.
   - Keep `unsafe` blocks minimal and well-documented with safety rationale comments (especially around SIMD intrinsics and transposes).
