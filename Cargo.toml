@@ -1,0 +1,55 @@
+[package]
+name = "fearless-md5"
+version = "0.1.0"
+edition = "2024"
+rust-version = "1.89"
+description = "High-throughput MD5 with portable SIMD and multi-buffer backends"
+license = "MIT OR Apache-2.0"
+keywords = ["md5", "simd", "hash", "checksum"]
+categories = ["algorithms", "cryptography"]
+
+[features]
+default = ["std", "digest"]
+
+# Runtime SIMD detection/dispatch through fearless_simd::Level::new().
+std = ["fearless_simd/std"]
+
+# no_std support. Build with:
+# cargo build --no-default-features --features libm,digest
+libm = ["fearless_simd/libm"]
+
+# RustCrypto Digest trait compatibility.
+digest = ["dep:digest"]
+
+[dependencies]
+fearless_simd = { version = "0.7.0", default-features = false }
+digest = { version = "0.11.3", default-features = false, features = [
+  "block-api",
+], optional = true }
+
+[dev-dependencies]
+# Correctness/reference implementations.
+md-5 = { version = "0.11.0", default-features = false }
+hex-literal = "1.1.0"
+proptest = "1"
+
+# Throughput benchmarks.
+criterion = "0.8.2"
+
+[[bench]]
+name = "throughput"
+harness = false
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+
+[profile.bench]
+lto = "thin"
+codegen-units = 1
+
+[workspace]
+
+[[example]]
+name = "probe"
+required-features = ["std"]
