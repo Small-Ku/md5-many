@@ -2,23 +2,23 @@ use fearless_simd::{Level, Simd, SimdBase, dispatch};
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::{
-    __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256, _mm256_loadu_si256,
-    _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32, _mm256_setzero_si256,
-    _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256, _mm256_unpackhi_epi32,
-    _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64, _mm256_xor_si256,
-    _mm512_add_epi32, _mm512_loadu_si512, _mm512_permutex2var_epi32, _mm512_rol_epi32,
-    _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512, _mm512_storeu_si512,
-    _mm512_ternarylogic_epi32,
+    __cpuid, __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256,
+    _mm256_loadu_si256, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32,
+    _mm256_setzero_si256, _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256,
+    _mm256_unpackhi_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64,
+    _mm256_xor_si256, _mm512_add_epi32, _mm512_loadu_si512, _mm512_permutex2var_epi32,
+    _mm512_rol_epi32, _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512,
+    _mm512_storeu_si512, _mm512_ternarylogic_epi32,
 };
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{
-    __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256, _mm256_loadu_si256,
-    _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32, _mm256_setzero_si256,
-    _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256, _mm256_unpackhi_epi32,
-    _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64, _mm256_xor_si256,
-    _mm512_add_epi32, _mm512_loadu_si512, _mm512_permutex2var_epi32, _mm512_rol_epi32,
-    _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512, _mm512_storeu_si512,
-    _mm512_ternarylogic_epi32,
+    __cpuid, __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256,
+    _mm256_loadu_si256, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32,
+    _mm256_setzero_si256, _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256,
+    _mm256_unpackhi_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64,
+    _mm256_xor_si256, _mm512_add_epi32, _mm512_loadu_si512, _mm512_permutex2var_epi32,
+    _mm512_rol_epi32, _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512,
+    _mm512_storeu_si512, _mm512_ternarylogic_epi32,
 };
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use fearless_simd::{Avx2, Avx512};
@@ -30,6 +30,42 @@ use crate::scalar;
 ///
 /// `fearless_simd` 0.7 uses up to 16 native `u32` lanes with AVX-512.
 const MAX_LANES: usize = 16;
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn amd_family_19h() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+
+    // 0 = unknown, 1 = no, 2 = yes. CPUID is serializing enough to matter for
+    // short hashes, so detect once and keep this tuning decision out of the hot path.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
+
+    // x86/x86_64 always supports the basic CPUID leaves queried here.
+    let leaf0 = __cpuid(0);
+    let authentic_amd =
+        leaf0.ebx == 0x6874_7541 && leaf0.edx == 0x6974_6e65 && leaf0.ecx == 0x444d_4163;
+    let is_family_19h = if authentic_amd {
+        // Leaf 1 is part of the baseline CPUID interface.
+        let leaf1 = __cpuid(1);
+        let base_family = (leaf1.eax >> 8) & 0x0f;
+        let ext_family = (leaf1.eax >> 20) & 0xff;
+        let family = if base_family == 0x0f {
+            base_family + ext_family
+        } else {
+            base_family
+        };
+        family == 0x19
+    } else {
+        false
+    };
+    CACHED.store(if is_family_19h { 2 } else { 1 }, Ordering::Relaxed);
+    is_family_19h
+}
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fearless_simd::kernel!(
@@ -5080,6 +5116,64 @@ fn hash_equal_len_avx2_padded(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline(always)]
+fn hash_equal_len_avx2_dual_padded(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((9..=16).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+    debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 16] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 16];
+    hash_equal_len_avx2_dual_kernel(avx2, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_equal_len_avx2_triple_padded(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((17..=24).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+    debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 24] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 24];
+    hash_equal_len_avx2_triple_kernel(avx2, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_mixed_len_avx2_dual_padded(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((9..=16).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 16] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 16];
+    hash_mixed_len_avx2_dual_kernel(avx2, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_mixed_len_avx2_triple_padded(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((17..=24).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 24] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 24];
+    hash_mixed_len_avx2_triple_kernel(avx2, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
 fn hash_mixed_len_avx2_padded(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
     debug_assert!((3..=8).contains(&inputs.len()));
     debug_assert_eq!(inputs.len(), outputs.len());
@@ -5101,6 +5195,64 @@ fn hash_mixed_len_avx512_padded(avx512: Avx512, inputs: &[&[u8]], outputs: &mut 
         core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
     let mut padded_outputs = [[0u8; 16]; 16];
     hash_mixed_len_avx512_kernel(avx512, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_equal_len_avx512_dual_padded(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((17..=32).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+    debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 32] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 32];
+    hash_equal_len_avx512_dual_kernel(avx512, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_equal_len_avx512_triple_padded(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((33..=48).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+    debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 48] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 48];
+    hash_equal_len_avx512_triple_kernel(avx512, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_mixed_len_avx512_dual_padded(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((17..=32).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 32] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 32];
+    hash_mixed_len_avx512_dual_kernel(avx512, &padded_inputs, &mut padded_outputs);
+    outputs.copy_from_slice(&padded_outputs[..active]);
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline(always)]
+fn hash_mixed_len_avx512_triple_padded(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    debug_assert!((33..=48).contains(&inputs.len()));
+    debug_assert_eq!(inputs.len(), outputs.len());
+
+    let active = inputs.len();
+    let padded_inputs: [&[u8]; 48] =
+        core::array::from_fn(|lane| inputs[core::cmp::min(lane, active - 1)]);
+    let mut padded_outputs = [[0u8; 16]; 48];
+    hash_mixed_len_avx512_triple_kernel(avx512, &padded_inputs, &mut padded_outputs);
     outputs.copy_from_slice(&padded_outputs[..active]);
 }
 
@@ -5160,6 +5312,117 @@ fn skew_partition<const N: usize, const HALF: usize>(inputs: &[&[u8]]) -> Option
     }
     debug_assert_eq!(out, N);
     Some(order)
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn skew_partition_dynamic<const MAX: usize>(inputs: &[&[u8]]) -> Option<([usize; MAX], usize)> {
+    debug_assert!(!inputs.is_empty());
+    debug_assert!(inputs.len() <= MAX);
+
+    let mut max_blocks = 0usize;
+    let mut block_counts = [0usize; MAX];
+    for (lane, input) in inputs.iter().enumerate() {
+        let blocks = padded_blocks_for_len(input.len());
+        block_counts[lane] = blocks;
+        max_blocks = core::cmp::max(max_blocks, blocks);
+    }
+
+    let mut short_count = 0usize;
+    for &blocks in &block_counts[..inputs.len()] {
+        short_count += usize::from(blocks.saturating_mul(2) <= max_blocks);
+    }
+    if short_count == 0 || short_count == inputs.len() {
+        return None;
+    }
+
+    let mut order = [0usize; MAX];
+    let mut short_out = 0usize;
+    let mut long_out = short_count;
+    for (lane, &blocks) in block_counts[..inputs.len()].iter().enumerate() {
+        if blocks.saturating_mul(2) <= max_blocks {
+            order[short_out] = lane;
+            short_out += 1;
+        } else {
+            order[long_out] = lane;
+            long_out += 1;
+        }
+    }
+    debug_assert_eq!(short_out, short_count);
+    debug_assert_eq!(long_out, inputs.len());
+    Some((order, short_count))
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn hash_skewed_partial_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    debug_assert!(!inputs.is_empty());
+    debug_assert!(inputs.len() <= 32);
+    debug_assert_eq!(inputs.len(), outputs.len());
+
+    let Some((order, split)) = skew_partition_dynamic::<32>(inputs) else {
+        return false;
+    };
+    let active = inputs.len();
+    let reordered_inputs: [&[u8]; 32] = core::array::from_fn(|lane| {
+        let source = if lane < active {
+            order[lane]
+        } else {
+            order[active - 1]
+        };
+        inputs[source]
+    });
+    let mut reordered_outputs = [[0u8; 16]; 32];
+    hash_many_avx2(
+        avx2,
+        &reordered_inputs[..split],
+        &mut reordered_outputs[..split],
+    );
+    hash_many_avx2(
+        avx2,
+        &reordered_inputs[split..active],
+        &mut reordered_outputs[split..active],
+    );
+    for lane in 0..active {
+        outputs[order[lane]] = reordered_outputs[lane];
+    }
+    true
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn hash_skewed_partial_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    debug_assert!(!inputs.is_empty());
+    debug_assert!(inputs.len() <= 64);
+    debug_assert_eq!(inputs.len(), outputs.len());
+
+    let Some((order, split)) = skew_partition_dynamic::<64>(inputs) else {
+        return false;
+    };
+    let active = inputs.len();
+    let reordered_inputs: [&[u8]; 64] = core::array::from_fn(|lane| {
+        let source = if lane < active {
+            order[lane]
+        } else {
+            order[active - 1]
+        };
+        inputs[source]
+    });
+    let mut reordered_outputs = [[0u8; 16]; 64];
+    hash_many_avx512(
+        avx512,
+        &reordered_inputs[..split],
+        &mut reordered_outputs[..split],
+    );
+    hash_many_avx512(
+        avx512,
+        &reordered_inputs[split..active],
+        &mut reordered_outputs[split..active],
+    );
+    for lane in 0..active {
+        outputs[order[lane]] = reordered_outputs[lane];
+    }
+    true
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -5228,7 +5491,70 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
     let mut start = 0;
     while start < inputs.len() {
         let remaining = inputs.len() - start;
+
+        // Under-filled dual/triple kernels are often faster than hashing one
+        // full native group and then paying for a small scalar/SIMD tail. The
+        // unused lanes duplicate the last real input and their digests are
+        // discarded.
+        if (9..=15).contains(&remaining) || (17..=23).contains(&remaining) {
+            let input_chunk = &inputs[start..];
+            let output_chunk = &mut outputs[start..];
+            let same_len = input_chunk
+                .first()
+                .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
+            if !same_len && hash_skewed_partial_avx2(avx2, input_chunk, output_chunk) {
+                break;
+            }
+            if remaining <= 15 {
+                if same_len {
+                    hash_equal_len_avx2_dual_padded(avx2, input_chunk, output_chunk);
+                } else {
+                    hash_mixed_len_avx2_dual_padded(avx2, input_chunk, output_chunk);
+                }
+            } else if same_len {
+                hash_equal_len_avx2_triple_padded(avx2, input_chunk, output_chunk);
+            } else {
+                hash_mixed_len_avx2_triple_padded(avx2, input_chunk, output_chunk);
+            }
+            break;
+        }
+
+        if (26..=31).contains(&remaining) {
+            let input_chunk = &inputs[start..];
+            let same_len = input_chunk
+                .first()
+                .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
+            if !same_len && hash_skewed_partial_avx2(avx2, input_chunk, &mut outputs[start..]) {
+                break;
+            }
+            if same_len {
+                hash_equal_len_avx2_dual_kernel(
+                    avx2,
+                    &input_chunk[..16],
+                    &mut outputs[start..start + 16],
+                );
+                hash_equal_len_avx2_dual_padded(
+                    avx2,
+                    &input_chunk[16..],
+                    &mut outputs[start + 16..],
+                );
+            } else {
+                hash_mixed_len_avx2_dual_kernel(
+                    avx2,
+                    &input_chunk[..16],
+                    &mut outputs[start..start + 16],
+                );
+                hash_mixed_len_avx2_dual_padded(
+                    avx2,
+                    &input_chunk[16..],
+                    &mut outputs[start + 16..],
+                );
+            }
+            break;
+        }
+
         let complete_avx2_groups = remaining / 8;
+
         if remaining >= 24 && complete_avx2_groups != 4 {
             let input_chunk = &inputs[start..start + 24];
             let same_len = input_chunk
@@ -5312,19 +5638,24 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
             .map(|input| padded_blocks_for_len(input.len()))
             .max()
             .unwrap_or(0);
-        let prefer_scalar = (input_chunk.len() == 2 && max_padded_blocks <= 5)
-            || (input_chunk.len() == 3 && max_padded_blocks <= 2);
+        let prefer_scalar = input_chunk.len() == 2 && max_padded_blocks == 1;
 
         if prefer_scalar {
             for (input, output) in input_chunk.iter().zip(output_chunk) {
                 *output = scalar::hash(input);
             }
         } else if same_len {
-            hash_equal_len_avx2_padded(avx2, input_chunk, output_chunk);
+            if input_chunk.len() == 8 {
+                hash_equal_len_avx2_kernel(avx2, input_chunk, output_chunk);
+            } else {
+                hash_equal_len_avx2_padded(avx2, input_chunk, output_chunk);
+            }
         } else if input_chunk.len() < 3 {
             for (input, output) in input_chunk.iter().zip(output_chunk) {
                 *output = scalar::hash(input);
             }
+        } else if input_chunk.len() == 8 {
+            hash_mixed_len_avx2_kernel(avx2, input_chunk, output_chunk);
         } else {
             hash_mixed_len_avx2_padded(avx2, input_chunk, output_chunk);
         }
@@ -5343,6 +5674,73 @@ fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) 
     let mut start = 0;
     while start < inputs.len() {
         let remaining = inputs.len() - start;
+
+        // As with AVX2, an under-filled interleaved kernel is faster than a
+        // full native batch followed by a small tail. Duplicate the last real
+        // input into inactive lanes and discard those outputs.
+        if (17..=31).contains(&remaining) || (33..=47).contains(&remaining) {
+            let input_chunk = &inputs[start..];
+            let output_chunk = &mut outputs[start..];
+            let same_len = input_chunk
+                .first()
+                .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
+            if !same_len && hash_skewed_partial_avx512(avx512, input_chunk, output_chunk) {
+                break;
+            }
+            if remaining <= 31 {
+                if same_len {
+                    hash_equal_len_avx512_dual_padded(avx512, input_chunk, output_chunk);
+                } else {
+                    hash_mixed_len_avx512_dual_padded(avx512, input_chunk, output_chunk);
+                }
+            } else if same_len {
+                hash_equal_len_avx512_triple_padded(avx512, input_chunk, output_chunk);
+            } else {
+                hash_mixed_len_avx512_triple_padded(avx512, input_chunk, output_chunk);
+            }
+            break;
+        }
+
+        if (50..=63).contains(&remaining) {
+            let input_chunk = &inputs[start..];
+            let same_len = input_chunk
+                .first()
+                .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
+            if !same_len && hash_skewed_partial_avx512(avx512, input_chunk, &mut outputs[start..]) {
+                break;
+            }
+            if same_len {
+                hash_equal_len_avx512_dual_kernel(
+                    avx512,
+                    &input_chunk[..32],
+                    &mut outputs[start..start + 32],
+                );
+                hash_equal_len_avx512_dual_padded(
+                    avx512,
+                    &input_chunk[32..],
+                    &mut outputs[start + 32..],
+                );
+                break;
+            }
+            // With a mixed batch, triple-48 plus a 2-message scalar tail is a
+            // pronounced cliff, while 9-15 remaining lanes switch back to a
+            // large AVX2 tail kernel. On the measured x86 targets it is faster
+            // to stay in two AVX-512 dual kernels for those tail shapes.
+            if remaining == 50 || remaining >= 57 {
+                hash_mixed_len_avx512_dual_kernel(
+                    avx512,
+                    &input_chunk[..32],
+                    &mut outputs[start..start + 32],
+                );
+                hash_mixed_len_avx512_dual_padded(
+                    avx512,
+                    &input_chunk[32..],
+                    &mut outputs[start + 32..],
+                );
+                break;
+            }
+        }
+
         let complete_avx512_groups = remaining / 16;
         if remaining >= 48 && complete_avx512_groups % 2 == 1 {
             let input_chunk = &inputs[start..start + 48];
@@ -5433,12 +5831,29 @@ fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) 
 
         if same_len {
             if input_chunk.len() <= 8 {
-                hash_equal_len_avx2_padded(avx2, input_chunk, output_chunk);
+                if input_chunk.len() == 8 {
+                    hash_equal_len_avx2_kernel(avx2, input_chunk, output_chunk);
+                } else {
+                    hash_equal_len_avx2_padded(avx2, input_chunk, output_chunk);
+                }
+            } else if amd_family_19h() && padded_blocks_for_len(input_chunk[0].len()) <= 17 {
+                // On AMD Family 19h AVX-512 parts, two interleaved YMM chains
+                // beat one ZMM chain for short equal-length batches. At larger
+                // sizes the AVX-512 native kernel wins back the fixed overhead.
+                if input_chunk.len() == 16 {
+                    hash_equal_len_avx2_dual_kernel(avx2, input_chunk, output_chunk);
+                } else {
+                    hash_equal_len_avx2_dual_padded(avx2, input_chunk, output_chunk);
+                }
+            } else if input_chunk.len() == 16 {
+                hash_equal_len_avx512_kernel(avx512, input_chunk, output_chunk);
             } else {
                 hash_equal_len_avx512_padded(avx512, input_chunk, output_chunk);
             }
         } else if input_chunk.len() <= 8 {
             hash_many_avx2(avx2, input_chunk, output_chunk);
+        } else if input_chunk.len() == 16 {
+            hash_mixed_len_avx512_kernel(avx512, input_chunk, output_chunk);
         } else {
             hash_mixed_len_avx512_padded(avx512, input_chunk, output_chunk);
         }
