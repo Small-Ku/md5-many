@@ -18,6 +18,8 @@ extern crate std;
 
 mod consts;
 mod scalar;
+#[cfg(target_arch = "x86_64")]
+mod scalar_x86_64;
 mod simd;
 
 #[cfg(feature = "digest")]
