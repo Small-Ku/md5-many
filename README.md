@@ -18,8 +18,9 @@ On x86 the specialized backend currently includes:
 - AVX-512 rounds use `VPTERNLOGD` for the MD5 Boolean functions and `VPROLD` for rotates.
 - Equal-length inputs use whole-stream kernels, AoS-to-SoA transposes, and broadcast pure-padding blocks.
 - Mixed-length inputs process the common full-block prefix at full SIMD speed, then handle only divergent tails separately.
-- Highly skewed mixed batches are repartitioned without allocation so one short message does not force many long messages through a slow tail path.
-- Very small under-filled AVX2 batches can fall back to the optimized scalar path when padding unused lanes would cost more than it saves.
+- Partial batches can duplicate the last real input into unused lanes so they still benefit from dual/triple instruction-level parallelism instead of falling into a small tail.
+- Highly skewed mixed batches, including under-filled dual/triple candidates, are repartitioned without allocation so one short message does not force many long messages through a slow divergent tail.
+- On AVX2, only a two-message batch that fits in one padded MD5 block prefers scalar hashing; three or more messages use SIMD.
 
 Other `fearless_simd` targets retain the portable multi-buffer implementation, including SSE-class x86, AArch64 NEON, WASM SIMD, and scalar fallback as supported by the selected `fearless_simd` release.
 
@@ -101,7 +102,9 @@ The Criterion suite contains:
 - single-stream comparison against RustCrypto `md-5`;
 - native-width equal-length batches at 64 B, 1 KiB, 64 KiB, and 1 MiB;
 - lane-fill crossover measurements;
+- partial-batch scaling around native, dual, and triple scheduler boundaries;
 - short mixed-length padding-boundary workloads;
+- a deliberately skewed under-filled mixed batch to catch divergent-tail regressions;
 - one-, two-, and three-native-batch mixed workloads around 64 KiB;
 - batch scaling through eight native SIMD groups.
 

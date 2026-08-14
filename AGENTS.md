@@ -21,14 +21,17 @@ Inputs arrive message-major (AoS). Native x86 kernels load one 64-byte block per
 - AVX-512: 16-way native, 32-way dual, 48-way triple.
 - Equal-length padding uses `build_padded_block` rather than byte-at-a-time synthesis.
 - A pure padding block shared by every lane is parsed once and broadcast instead of loaded/transposed N times.
-- Very small 2- and 3-message AVX2 tails may use optimized scalar hashing when under-filled SIMD loses.
+- Under-filled AVX2 dual/triple candidates duplicate a real lane rather than falling into a small tail: 9-15 messages use padded dual, 17-23 padded triple, and 26-31 equal/near-mixed batches use two dual kernels.
+- A two-message AVX2 batch uses optimized scalar hashing only when each message fits in one padded MD5 block (input length <= 55 bytes). Three or more messages prefer SIMD.
+- On measured AMD Family 19h AVX-512 hosts, short equal 9-16-message batches (up to 17 padded blocks) use two AVX2 chains; do not broaden this heuristic to other x86 families without measurements.
 
 ### Mixed-length scheduling
 
 - Process the common full-block prefix with the same native transpose/compression machinery.
 - Build only divergent padded tails separately.
 - Dual/triple mixed kernels interleave independent SIMD state chains just like equal-length kernels.
-- The no-allocation skew planner partitions highly uneven batches before dual scheduling so a short lane cannot drag long lanes through a slow tail path.
+- The no-allocation skew planner also protects under-filled dual/triple and partial-tail fast paths. If padded block counts differ by at least 2x, it recursively partitions short and long lanes, hashes the sub-batches, then scatters digests back to the caller's order.
+- AVX-512 17-31 and 33-47-message mixed/equal batches can use padded dual/triple kernels. Selected 50-63-message shapes stay in two AVX-512 dual kernels when that avoids a pathological tiny or large AVX2 tail.
 
 ## Module layout
 
