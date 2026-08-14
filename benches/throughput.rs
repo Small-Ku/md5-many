@@ -256,6 +256,75 @@ fn bench_batch_scaling(c: &mut Criterion) {
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn bench_x86_small_batch_dispatch(c: &mut Criterion) {
+    use fearless_simd::Level;
+
+    let detected = Level::new();
+    let Some(avx512) = detected.as_avx512() else {
+        return;
+    };
+    let avx2 = detected
+        .as_avx2()
+        .expect("AVX-512 level must also provide an AVX2 token");
+    let auto = Md5Many::from_level(Level::Avx512(avx512));
+    let forced_avx2 = Md5Many::from_level(Level::Avx2(avx2));
+
+    for &size in &[1024usize, 64 * 1024] {
+        let storage: Vec<Vec<u8>> = (0..8)
+            .map(|lane| vec![(lane as u8).wrapping_mul(43); size])
+            .collect();
+        let inputs: Vec<&[u8]> = storage.iter().map(Vec::as_slice).collect();
+        let mut auto_outputs = [[0u8; 16]; 8];
+        let mut avx2_outputs = [[0u8; 16]; 8];
+
+        let mut group = c.benchmark_group(format!("x86-small-batch-equal-{size}"));
+        group.throughput(Throughput::Bytes((8 * size) as u64));
+        group.bench_function("auto", |b| {
+            b.iter(|| {
+                auto.hash_many(black_box(&inputs), black_box(&mut auto_outputs));
+                black_box(&auto_outputs);
+            })
+        });
+        group.bench_function("forced-avx2", |b| {
+            b.iter(|| {
+                forced_avx2.hash_many(black_box(&inputs), black_box(&mut avx2_outputs));
+                black_box(&avx2_outputs);
+            })
+        });
+        group.finish();
+    }
+
+    for &(label, base) in &[("1KiB", 1024usize), ("64KiB", 64 * 1024)] {
+        let storage: Vec<Vec<u8>> = (0..8)
+            .map(|lane| vec![(lane as u8).wrapping_mul(47); base + lane * 64])
+            .collect();
+        let inputs: Vec<&[u8]> = storage.iter().map(Vec::as_slice).collect();
+        let total: usize = inputs.iter().map(|input| input.len()).sum();
+        let mut auto_outputs = [[0u8; 16]; 8];
+        let mut avx2_outputs = [[0u8; 16]; 8];
+
+        let mut group = c.benchmark_group(format!("x86-small-batch-mixed-{label}"));
+        group.throughput(Throughput::Bytes(total as u64));
+        group.bench_function("auto", |b| {
+            b.iter(|| {
+                auto.hash_many(black_box(&inputs), black_box(&mut auto_outputs));
+                black_box(&auto_outputs);
+            })
+        });
+        group.bench_function("forced-avx2", |b| {
+            b.iter(|| {
+                forced_avx2.hash_many(black_box(&inputs), black_box(&mut avx2_outputs));
+                black_box(&avx2_outputs);
+            })
+        });
+        group.finish();
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn bench_x86_small_batch_dispatch(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_single,
@@ -266,5 +335,6 @@ criterion_group!(
     bench_mixed_lengths,
     bench_partial_batch_scaling,
     bench_batch_scaling,
+    bench_x86_small_batch_dispatch,
 );
 criterion_main!(benches);

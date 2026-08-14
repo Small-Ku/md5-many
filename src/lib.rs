@@ -225,6 +225,51 @@ mod tests {
 
     #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
     #[test]
+    fn avx512_small_batch_crossover_matches_reference() {
+        let engine = Md5Many::new();
+        if engine.lanes() < 16 {
+            return;
+        }
+
+        let storage: [[u8; 1216]; 8] =
+            core::array::from_fn(|lane| core::array::from_fn(|i| (lane * 41 + i * 7) as u8));
+
+        for active in [2usize, 4, 8] {
+            for len in [512usize, 513, 1024] {
+                let inputs: std::vec::Vec<&[u8]> = storage[..active]
+                    .iter()
+                    .map(|input| &input[..len])
+                    .collect();
+                let mut outputs = std::vec![[0u8; 16]; active];
+                engine.hash_many(&inputs, &mut outputs);
+                for lane in 0..active {
+                    assert_eq!(
+                        outputs[lane],
+                        reference(inputs[lane]),
+                        "equal active={active}, lane={lane}, len={len}"
+                    );
+                }
+            }
+
+            let inputs: std::vec::Vec<&[u8]> = storage[..active]
+                .iter()
+                .enumerate()
+                .map(|(lane, input)| &input[..512 + lane * 73])
+                .collect();
+            let mut outputs = std::vec![[0u8; 16]; active];
+            engine.hash_many(&inputs, &mut outputs);
+            for lane in 0..active {
+                assert_eq!(
+                    outputs[lane],
+                    reference(inputs[lane]),
+                    "mixed active={active}, lane={lane}"
+                );
+            }
+        }
+    }
+
+    #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
+    #[test]
     fn x86_triple_batches_match_reference() {
         let detected = fearless_simd::Level::new();
 
