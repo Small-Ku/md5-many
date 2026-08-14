@@ -271,6 +271,122 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
+    #[test]
+    fn x86_partial_batch_boundaries_match_reference() {
+        fn check_counts(engine: Md5Many, counts: &[usize], base_len: usize) {
+            let equal_storage: std::vec::Vec<std::vec::Vec<u8>> = (0..64)
+                .map(|lane| (0..base_len).map(|i| (lane * 41 + i * 17) as u8).collect())
+                .collect();
+            let mixed_storage: std::vec::Vec<std::vec::Vec<u8>> = (0..64)
+                .map(|lane| {
+                    let len = base_len - (lane % 13) * 7;
+                    (0..len).map(|i| (lane * 23 + i * 29) as u8).collect()
+                })
+                .collect();
+
+            for &count in counts {
+                for (kind, storage) in [("equal", &equal_storage), ("mixed", &mixed_storage)] {
+                    let inputs: std::vec::Vec<&[u8]> = storage[..count]
+                        .iter()
+                        .map(std::vec::Vec::as_slice)
+                        .collect();
+                    let mut outputs = std::vec![[0u8; 16]; count];
+                    engine.hash_many(&inputs, &mut outputs);
+                    for (lane, (input, output)) in inputs.iter().zip(&outputs).enumerate() {
+                        assert_eq!(
+                            *output,
+                            reference(input),
+                            "{kind} count={count} lane={lane}"
+                        );
+                    }
+                }
+            }
+        }
+
+        let detected = fearless_simd::Level::new();
+        if let Some(avx2) = detected.as_avx2() {
+            let engine = Md5Many::from_level(fearless_simd::Level::Avx2(avx2));
+            check_counts(
+                engine,
+                &[
+                    2, 3, 8, 9, 15, 16, 17, 23, 24, 25, 26, 31, 32, 49, 50, 55, 56, 63, 64,
+                ],
+                257,
+            );
+
+            // Exercise both sides of the two-message one-block crossover.
+            for len in [55usize, 56] {
+                let storage = [std::vec![0x35u8; len], std::vec![0xa7u8; len]];
+                let inputs = [storage[0].as_slice(), storage[1].as_slice()];
+                let mut outputs = [[0u8; 16]; 2];
+                engine.hash_many(&inputs, &mut outputs);
+                for lane in 0..2 {
+                    assert_eq!(
+                        outputs[lane],
+                        reference(inputs[lane]),
+                        "len={len} lane={lane}"
+                    );
+                }
+            }
+        }
+
+        if let Some(avx512) = detected.as_avx512() {
+            let engine = Md5Many::from_level(fearless_simd::Level::Avx512(avx512));
+            check_counts(
+                engine,
+                &[8, 9, 16, 17, 31, 32, 33, 47, 48, 49, 50, 56, 63, 64],
+                2048,
+            );
+        }
+    }
+
+    #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
+    #[test]
+    fn x86_underfilled_skew_batches_match_reference() {
+        fn check(engine: Md5Many, count: usize, short_count: usize) {
+            let storage: std::vec::Vec<std::vec::Vec<u8>> = (0..count)
+                .map(|lane| {
+                    let len = if lane < short_count { 129 } else { 4097 };
+                    (0..len).map(|i| (lane * 47 + i * 19) as u8).collect()
+                })
+                .collect();
+            let inputs: std::vec::Vec<&[u8]> =
+                storage.iter().map(std::vec::Vec::as_slice).collect();
+            let mut outputs = std::vec![[0u8; 16]; count];
+            engine.hash_many(&inputs, &mut outputs);
+            for (lane, (input, output)) in inputs.iter().zip(&outputs).enumerate() {
+                assert_eq!(
+                    *output,
+                    reference(input),
+                    "count={count} short_count={short_count} lane={lane}"
+                );
+            }
+        }
+
+        let detected = fearless_simd::Level::new();
+        if let Some(avx2) = detected.as_avx2() {
+            let engine = Md5Many::from_level(fearless_simd::Level::Avx2(avx2));
+            for (count, short_count) in [(9, 4), (15, 7), (17, 8), (23, 8), (26, 8), (31, 15)] {
+                check(engine, count, short_count);
+            }
+        }
+        if let Some(avx512) = detected.as_avx512() {
+            let engine = Md5Many::from_level(fearless_simd::Level::Avx512(avx512));
+            for (count, short_count) in [
+                (17, 8),
+                (31, 15),
+                (33, 16),
+                (47, 16),
+                (50, 16),
+                (57, 16),
+                (63, 31),
+            ] {
+                check(engine, count, short_count);
+            }
+        }
+    }
+
     #[cfg(any(feature = "std", target_arch = "wasm32"))]
     #[test]
     fn many_padding_boundaries_match_reference() {

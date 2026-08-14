@@ -130,6 +130,40 @@ fn bench_mixed_short(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_skewed_partial(c: &mut Criterion) {
+    let engine = Md5Many::new();
+    let lanes = engine.lanes();
+    if !matches!(lanes, 8 | 16) {
+        return;
+    }
+
+    let count = lanes * 2 - 1;
+    let short_count = lanes - 1;
+    let storage: Vec<Vec<u8>> = (0..count)
+        .map(|lane| vec![lane as u8; if lane < short_count { 1024 } else { 64 * 1024 }])
+        .collect();
+    let inputs: Vec<&[u8]> = storage.iter().map(Vec::as_slice).collect();
+    let total: usize = inputs.iter().map(|input| input.len()).sum();
+    let mut outputs = vec![[0u8; 16]; count];
+
+    let mut group = c.benchmark_group(format!("mixed-skewed-{count}-way"));
+    group.throughput(Throughput::Bytes(total as u64));
+    group.bench_function("fearless", |b| {
+        b.iter(|| {
+            engine.hash_many(black_box(&inputs), black_box(&mut outputs));
+            black_box(&outputs);
+        })
+    });
+    group.bench_function("rustcrypto-baseline-serial", |b| {
+        b.iter(|| {
+            for input in &inputs {
+                black_box(RustCryptoMd5::digest(black_box(input)));
+            }
+        })
+    });
+    group.finish();
+}
+
 fn bench_mixed_lengths(c: &mut Criterion) {
     let engine = Md5Many::new();
     let lanes = engine.lanes();
@@ -159,6 +193,43 @@ fn bench_mixed_lengths(c: &mut Criterion) {
         });
         group.finish();
     }
+}
+
+fn bench_partial_batch_scaling(c: &mut Criterion) {
+    let engine = Md5Many::new();
+    let lanes = engine.lanes();
+    let size = 64 * 1024usize;
+    let counts: &[usize] = match lanes {
+        8 => &[2, 3, 8, 9, 15, 16, 17, 23, 24, 26, 31, 32, 48, 56, 64],
+        16 => &[8, 16, 17, 31, 32, 33, 47, 48, 50, 56, 63, 64],
+        _ => &[],
+    };
+
+    if counts.is_empty() {
+        return;
+    }
+
+    let max_count = *counts.iter().max().expect("non-empty partial count list");
+    let storage: Vec<Vec<u8>> = (0..max_count)
+        .map(|lane| vec![(lane as u8).wrapping_mul(37); size])
+        .collect();
+    let all_inputs: Vec<&[u8]> = storage.iter().map(Vec::as_slice).collect();
+    let mut all_outputs = vec![[0u8; 16]; max_count];
+
+    let mut group = c.benchmark_group("partial-batch-scaling-64KiB");
+    for &count in counts {
+        group.throughput(Throughput::Bytes((count * size) as u64));
+        group.bench_with_input(BenchmarkId::new("fearless", count), &count, |b, &count| {
+            b.iter(|| {
+                engine.hash_many(
+                    black_box(&all_inputs[..count]),
+                    black_box(&mut all_outputs[..count]),
+                );
+                black_box(&all_outputs[..count]);
+            })
+        });
+    }
+    group.finish();
 }
 
 fn bench_batch_scaling(c: &mut Criterion) {
@@ -191,7 +262,9 @@ criterion_group!(
     bench_many,
     bench_lane_fill,
     bench_mixed_short,
+    bench_skewed_partial,
     bench_mixed_lengths,
+    bench_partial_batch_scaling,
     bench_batch_scaling,
 );
 criterion_main!(benches);
