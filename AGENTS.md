@@ -1,95 +1,69 @@
 # AGENTS.md
 
-Developer and AI agent guidance for working in `md5-many`.
+Developer guidance for `md5-many`.
 
----
+## Architecture
 
-## 1. Project Overview & Architecture
+`md5-many` has two performance domains:
 
-`md5-many` is a high-throughput Rust implementation of MD5 focusing on **multi-buffer SIMD parallelism** via [`fearless_simd`](https://crates.io/crates/fearless_simd).
+1. **Single stream**: MD5 blocks are sequentially dependent. x86-64 uses the optimized backend in `src/scalar_x86_64.rs`; `src/scalar.rs` remains the portable implementation and correctness oracle.
+2. **Independent messages**: `src/simd.rs` maps independent MD5 states to SIMD lanes through `fearless_simd`.
 
-### Core Concepts
+Specialized x86 kernels use 8 lanes for AVX2 and 16 lanes for AVX-512. Two or three native groups can be interleaved round-by-round to hide the dependency latency of one MD5 chain. Four-way interleaving was benchmarked and rejected due to register/issue pressure; do not reintroduce it without new evidence.
 
-1. **Sequential vs Multi-Buffer Dependency**:
-   - Single-stream MD5 has an inherent block-to-block data dependency; vectorizing a single message is limited.
-   - Independent messages can execute simultaneously in separate SIMD lanes.
-   - Target native widths: 16 lanes on AVX-512, 8 lanes on AVX2, and 4 lanes on SSE4.2 / AArch64 NEON / WASM SIMD128.
+### Data layout
 
-2. **AoS to SoA Transpose**:
-   - Equal-length batch inputs are loaded in message-major order (Array of Structures / AoS).
-   - Blocks are transposed into 16 lane-vectors of `u32` words (Structure of Arrays / SoA) before running the unrolled 64-round compression function.
+Inputs arrive message-major (AoS). Native x86 kernels load one 64-byte block per message and transpose the 16 MD5 `u32` words into lane-major vectors (SoA). Keep the whole message loop inside a single `fearless_simd::kernel!` boundary; per-block kernel transitions were measured to be extremely expensive.
 
-3. **Kernel Boundary Minimization**:
-   - Crossing `fearless_simd::kernel!` boundaries per-block incurs high overhead.
-   - The entire equal-length streaming loop stays inside a single kernel dispatch region.
+### Equal-length scheduling
 
-4. **Batch Processing Strategy**:
-   - **Equal-length batches**: Fast path with unrolled multi-block loops.
-   - **Mixed-length batches**: Lanes are advanced lockstep per 64-byte block; each lane's digest is finalized immediately upon reaching its padded final block.
-   - **Tail / Small batches**: one-message tails use scalar MD5; equal-length 2-7 message batches pad to the AVX2 8-way kernel, and AVX-512 uses its 16-way kernel for 9-16 messages.
+- AVX2: 8-way native, 16-way dual, 24-way triple.
+- AVX-512: 16-way native, 32-way dual, 48-way triple.
+- Equal-length padding uses `build_padded_block` rather than byte-at-a-time synthesis.
+- A pure padding block shared by every lane is parsed once and broadcast instead of loaded/transposed N times.
+- Very small 2- and 3-message AVX2 tails may use optimized scalar hashing when under-filled SIMD loses.
 
----
+### Mixed-length scheduling
 
-## 2. Module Layout
+- Process the common full-block prefix with the same native transpose/compression machinery.
+- Build only divergent padded tails separately.
+- Dual/triple mixed kernels interleave independent SIMD state chains just like equal-length kernels.
+- The no-allocation skew planner partitions highly uneven batches before dual scheduling so a short lane cannot drag long lanes through a slow tail path.
+
+## Module layout
 
 ```text
-md5_many/
-├── Cargo.toml          # Features: std (default), digest (default), libm
-├── src/
-│   ├── lib.rs          # Public API: md5, md5_many, Md5Many, RustCrypto exports
-│   ├── simd.rs         # SIMD dispatch, AVX2 8-way + AVX-512 16-way kernels, SoA transposes
-│   ├── scalar.rs       # Portable scalar MD5 implementation & reference logic
-│   ├── block_api.rs    # RustCrypto `digest` trait adapter (Md5Core)
-│   └── consts.rs       # Round constants (K), shifts (S), initial state (IV)
-├── benches/
-│   └── throughput.rs   # Criterion benchmarks comparing scalar, RustCrypto `md-5`, md-5, and SIMD
-└── examples/
-    └── probe.rs        # Runtime SIMD probe and sanity verification utility
+src/lib.rs            public API and tests
+src/scalar.rs         portable scalar MD5 and dispatch wrapper
+src/scalar_x86_64.rs  optimized x86-64 single-stream compression
+src/simd.rs           SIMD dispatch, native x86 kernels, schedulers and fallback
+src/block_api.rs      RustCrypto digest block adapter
+src/consts.rs         MD5 IV, round constants and shifts
+benches/throughput.rs user-facing Criterion performance suite
+examples/probe.rs     detected native lane count
 ```
 
----
+## Verification
 
-## 3. Development & Verification Workflows
+Use the repository toolchain or normal Rust installation:
 
-### Standard Test Suite
 ```bash
-cargo test
-```
-Runs unit tests, RFC test vectors, mixed/equal length property tests (`proptest`), and padding boundary checks.
-
-### Feature Matrix Verification
-Ensure all feature combinations build cleanly:
-```bash
-# Default (std + digest)
-cargo check
-
-# no_std with libm and digest
-cargo check --no-default-features --features libm,digest
-
-# no_std without Digest integration
-cargo check --no-default-features --features libm
+cargo test --locked
+cargo test --locked --no-default-features --features libm
+cargo test --locked --no-default-features --features libm,digest
+cargo fmt --all -- --check
+cargo clippy --locked --all-targets --all-features -- -D warnings
+cargo package --locked
 ```
 
-### Benchmarks
-```bash
-cargo bench --bench throughput
-```
+`fearless_simd` 0.7 requires either `std` or `libm`; plain `--no-default-features` is not a valid dependency configuration.
 
-### Probing SIMD Level
-```bash
-cargo run --example probe
-```
+For performance work, compare before/after with the same Criterion benchmark name and inspect release machine code when an optimization depends on a particular ISA instruction. A plausible algebraic rewrite is not sufficient reason to keep a change.
 
----
+## Invariants
 
-## 4. Coding Standards & Invariants
-
-- **Rust Edition & MSRV**: Edition 2024, Rust 1.89+.
-- **`#![no_std]` core**: Core crate logic must work without `std`. `fearless_simd` 0.7 requires either `std` or `libm`, so no-std verification enables this crate's `libm` feature. Use conditional `extern crate std;` under `#[cfg(feature = "std")]`.
-- **Unsafe Code Guidelines**:
-  - `#![deny(unsafe_op_in_unsafe_fn)]` is enforced.
-  - Keep `unsafe` blocks minimal and well-documented with safety rationale comments (especially around SIMD intrinsics and transposes).
-- **Public API Documentation**:
-  - `#![warn(missing_docs)]` is active. All public items, traits, and structs must have doc comments and usage examples.
-- **Precision & Correctness**:
-  - Any modifications to padding, length encoding, or round operations must be validated against the `proptest` and RFC suites.
+- Edition 2024; declared MSRV Rust 1.89.
+- `#![no_std]` core; `std` is feature-gated.
+- `#![deny(unsafe_op_in_unsafe_fn)]` and documented safety assumptions around intrinsics.
+- Every padding, transpose, scheduler or round change must be checked against the reference `md-5` implementation and randomized batch tests.
+- Keep `vendor/` and `.cargo/config*` out of the repository and release bundle.

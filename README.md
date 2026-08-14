@@ -1,35 +1,36 @@
 # md5-many
 
-High-throughput, multi-buffer MD5 implementation for Rust, accelerated by [`fearless_simd`](https://crates.io/crates/fearless_simd).
+High-throughput MD5 for Rust, with an optimized single-stream path and runtime-dispatched multi-buffer SIMD powered by [`fearless_simd`](https://crates.io/crates/fearless_simd).
 
-[![Crates.io](https://img.shields.io/crates/v/md5-many.svg)](https://crates.io/crates/md5-many)
-[![Documentation](https://docs.rs/md5-many/badge.svg)](https://docs.rs/md5-many)
-[![License](https://img.shields.io/badge/license-MIT%20OR%20Apache--2.0-blue.svg)](Cargo.toml)
+> **MD5 is cryptographically broken.** Use this crate only where MD5 is required for legacy interoperability or non-adversarial checksumming. Do not use it for signatures, passwords, certificates, collision-resistant identifiers, or attacker-controlled integrity checks.
 
----
+## What it does
 
-## Overview
+A single MD5 stream has a dependency between consecutive 64-byte blocks, so wide SIMD is most useful when several independent messages are available at once. `md5-many` therefore exposes two complementary paths:
 
-A standard MD5 digest has a sequential dependency between consecutive 64-byte blocks, making single-stream hashing fundamentally scalar-bound. However, multiple independent messages can be processed simultaneously across parallel SIMD vector lanes.
+- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compression backend; other targets retain the portable Rust compressor.
+- `Md5Many`: batches independent messages into SIMD lanes and chooses a scheduler appropriate to the detected CPU and workload.
 
-`md5-many` provides:
-- **Single-message hashing**: standard portable scalar MD5.
-- **Multi-buffer SIMD hashing (`Md5Many`)**: parallel computation across SIMD lanes (16-way on AVX-512, 8-way on AVX2, 4-way on SSE4.2 / NEON / WASM SIMD128).
-- **RustCrypto trait compatibility**: optional `digest` crate integration.
-- **`no_std` support**: lightweight embedded and WebAssembly readiness.
+On x86 the specialized backend currently includes:
 
----
+- AVX2: 8-message native kernels plus interleaved 16-message dual-chain and 24-message triple-chain kernels.
+- AVX-512: 16-message native kernels plus interleaved 32-message dual-chain and 48-message triple-chain kernels.
+- AVX-512 rounds use `VPTERNLOGD` for the MD5 Boolean functions and `VPROLD` for rotates.
+- Equal-length inputs use whole-stream kernels, AoS-to-SoA transposes, and broadcast pure-padding blocks.
+- Mixed-length inputs process the common full-block prefix at full SIMD speed, then handle only divergent tails separately.
+- Highly skewed mixed batches are repartitioned without allocation so one short message does not force many long messages through a slow tail path.
+- Very small under-filled AVX2 batches can fall back to the optimized scalar path when padding unused lanes would cost more than it saves.
+
+Other `fearless_simd` targets retain the portable multi-buffer implementation, including SSE-class x86, AArch64 NEON, WASM SIMD, and scalar fallback as supported by the selected `fearless_simd` release.
 
 ## Usage
-
-Add `md5-many` to your `Cargo.toml`:
 
 ```toml
 [dependencies]
 md5-many = "0.1"
 ```
 
-### 1. Single-Message Hashing
+### Single message
 
 ```rust
 use md5_many::md5;
@@ -44,9 +45,7 @@ assert_eq!(
 );
 ```
 
-### 2. Multi-Buffer Batch Hashing (`Md5Many`)
-
-When you have multiple independent inputs to hash (such as batch deduplication, file chunk verification, or asset processing), `Md5Many` computes digests concurrently:
+### Batch hashing
 
 ```rust
 use md5_many::Md5Many;
@@ -58,11 +57,11 @@ let hasher = Md5Many::new();
 hasher.hash_many(&inputs, &mut outputs);
 ```
 
-`Md5Many` automatically handles both equal-length and mixed-length batches. On x86, equal-length batches use specialized whole-stream kernels: AVX2 pads 2–7 active messages to its optimized 8-way kernel, while AVX-512 uses a 16-way kernel for 9–16 messages and delegates smaller batches to AVX2. The AVX-512 round function uses `VPTERNLOGD` for the MD5 Boolean functions and `VPROLD` for rotates.
+Construct `Md5Many` once and reuse it when possible; this avoids repeating runtime CPU-feature detection.
 
-### 3. RustCrypto `digest` Compatibility
+### RustCrypto `digest` compatibility
 
-When the `digest` feature is enabled (default), `md5_many::Md5` implements the standard RustCrypto traits:
+The default `digest` feature exposes `md5_many::Md5`:
 
 ```rust
 use md5_many::{Digest, Md5};
@@ -73,52 +72,61 @@ hasher.update(b"world");
 let result = hasher.finalize();
 ```
 
----
+## Features
 
-## Feature Flags
+| Feature | Default | Purpose |
+| --- | :---: | --- |
+| `std` | yes | Runtime SIMD detection through `fearless_simd`. |
+| `digest` | yes | RustCrypto `digest` trait compatibility. |
+| `libm` | no | Required `fearless_simd` support for `no_std` builds. |
 
-| Feature | Default | Description |
-| :--- | :---: | :--- |
-| `std` | **Yes** | Enables runtime SIMD detection via standard library facilities. |
-| `digest` | **Yes** | Implements traits from the [`digest`](https://crates.io/crates/digest) crate (`Digest`, `FixedOutput`, etc.). |
-| `libm` | No | Enables floating-point helpers for `no_std` environments where required. |
-
-To use in a `#![no_std]` environment:
+`fearless_simd` 0.7 requires at least one of its `std` or `libm` modes. A `no_std` dependency therefore looks like:
 
 ```toml
 [dependencies]
 md5-many = { version = "0.1", default-features = false, features = ["libm", "digest"] }
 ```
 
----
+Or omit `digest` if the block-trait adapter is not needed.
 
-## Benchmarks
-
-Run the benchmark suite with:
+## Testing and benchmarks
 
 ```bash
-cargo bench --bench throughput
+cargo test --locked
+cargo bench --locked --bench throughput
 ```
 
-The benchmarks compare single-stream scalar MD5, `RustCrypto `md-5``, RustCrypto `md-5`, multi-buffer SIMD throughput, and SIMD lane-fill efficiencies.
+The Criterion suite contains:
 
-On an AVX-512 host, `Md5Many::lanes()` reports 16 and the lane-fill benchmark makes the AVX2-to-AVX-512 crossover visible. On AVX2-only CPUs such as Zen 3, it reports 8 and uses the same padded 8-way fast path for equal-length batches with two or more active messages.
+- single-stream comparison against RustCrypto `md-5`;
+- native-width equal-length batches at 64 B, 1 KiB, 64 KiB, and 1 MiB;
+- lane-fill crossover measurements;
+- short mixed-length padding-boundary workloads;
+- one-, two-, and three-native-batch mixed workloads around 64 KiB;
+- batch scaling through eight native SIMD groups.
 
----
+To inspect the runtime native lane width:
 
-## Security Advisory
+```bash
+cargo run --release --example probe
+```
 
-> [!CAUTION]
-> **MD5 is cryptographically broken.**
->
-> Do **not** use this crate for digital signatures, certificates, password hashing, HMACs, collision-resistant identifiers, or adversary-controlled data integrity. This crate is intended strictly for legacy protocol interoperability, non-cryptographic checksumming, and cache indexing where MD5 is mandated.
+A Zen 3 CPU such as a Ryzen 7 5800X3D reports an 8-lane AVX2 engine. An AVX-512-capable host reports 16 native lanes, while the scheduler may internally interleave two or three native groups to expose more instruction-level parallelism.
 
----
+## `no_std` verification
+
+```bash
+cargo test --locked --no-default-features --features libm
+cargo test --locked --no-default-features --features libm,digest
+```
 
 ## License
 
-Licensed under either of:
-- Apache License, Version 2.0 ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-- MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
 
-at your option.
+The package license expression is therefore:
+
+```text
+MIT OR Apache-2.0
+```
+
+See `LICENSE-MIT` and `LICENSE-APACHE`.
