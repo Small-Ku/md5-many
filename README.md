@@ -21,6 +21,7 @@ On x86 the specialized backend currently includes:
 - Partial batches can duplicate the last real input into unused lanes so they still benefit from dual/triple instruction-level parallelism instead of falling into a small tail.
 - Highly skewed mixed batches, including under-filled dual/triple candidates, are repartitioned without allocation so one short message does not force many long messages through a slow divergent tail.
 - On AVX2, only a two-message batch that fits in one padded MD5 block prefers scalar hashing; three or more messages use SIMD.
+- AVX-512 small batches remain on AVX2 by default. A narrowly measured x86 family 6/model `0xCF` tuning uses padded AVX-512 for 2-8-message equal or mixed batches once every message is at least 512 B; other AVX-512 CPUs keep the conservative AVX2 choice until measured.
 
 Other `fearless_simd` targets retain the portable multi-buffer implementation, including SSE-class x86, AArch64 NEON, WASM SIMD, and scalar fallback as supported by the selected `fearless_simd` release.
 
@@ -106,7 +107,8 @@ The Criterion suite contains:
 - short mixed-length padding-boundary workloads;
 - a deliberately skewed under-filled mixed batch to catch divergent-tail regressions;
 - one-, two-, and three-native-batch mixed workloads around 64 KiB;
-- batch scaling through eight native SIMD groups.
+- batch scaling through eight native SIMD groups;
+- on AVX-512 x86 hosts, forced `auto` versus AVX2 comparisons for 8-message equal/mixed 1 KiB and 64 KiB workloads, so small-batch crossover changes can be measured without relying on Criterion history.
 
 To inspect the runtime native lane width:
 

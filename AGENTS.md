@@ -24,6 +24,7 @@ Inputs arrive message-major (AoS). Native x86 kernels load one 64-byte block per
 - Under-filled AVX2 dual/triple candidates duplicate a real lane rather than falling into a small tail: 9-15 messages use padded dual, 17-23 padded triple, and 26-31 equal/near-mixed batches use two dual kernels.
 - A two-message AVX2 batch uses optimized scalar hashing only when each message fits in one padded MD5 block (input length <= 55 bytes). Three or more messages prefer SIMD.
 - On measured AMD Family 19h AVX-512 hosts, short equal 9-16-message batches (up to 17 padded blocks) use two AVX2 chains; do not broaden this heuristic to other x86 families without measurements.
+- AVX-512 hosts normally keep 2-8-message batches on AVX2. The measured x86 family 6/model `0xCF` crossover is an explicit exception: equal batches at >=512 B and mixed batches whose shortest message is >=512 B use a padded ZMM kernel. Keep this model-specific unless another CPU is benchmarked directly.
 
 ### Mixed-length scheduling
 
@@ -61,7 +62,7 @@ cargo package --locked
 
 `fearless_simd` 0.7 requires either `std` or `libm`; plain `--no-default-features` is not a valid dependency configuration.
 
-For performance work, compare before/after with the same Criterion benchmark name and inspect release machine code when an optimization depends on a particular ISA instruction. A plausible algebraic rewrite is not sufficient reason to keep a change.
+For performance work, compare before/after with the same Criterion benchmark name and inspect release machine code when an optimization depends on a particular ISA instruction. A plausible algebraic rewrite is not sufficient reason to keep a change. On AVX-512 x86 hosts, the `x86-small-batch-*` Criterion groups compare runtime `auto` dispatch against a forced AVX2 level and should be used before changing the <=8-message crossover.
 
 ## Invariants
 
