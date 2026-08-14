@@ -6,8 +6,9 @@
 //! `fearless-md5` keeps the standard single-stream MD5 API separate from its
 //! SIMD batch engine. A single MD5 stream has a dependency from one 64-byte
 //! block to the next, while independent messages can occupy independent SIMD
-//! lanes. On x86-64, `fearless_simd` 0.7 maps naturally to 16-way AVX-512 or 8-way
-//! AVX2 MD5; SSE4.2, AArch64 NEON and WASM SIMD use four lanes.
+//! lanes. On x86-64 the batch scheduler combines 8-way AVX2 or 16-way AVX-512
+//! native kernels with interleaved dual- and triple-batch kernels to expose
+//! additional instruction-level parallelism.
 //!
 //! MD5 is cryptographically broken and must not be used for signatures,
 //! password hashing, or adversarial integrity. This crate targets legacy
@@ -41,9 +42,10 @@ pub type Md5Digest = [u8; 16];
 
 /// Compute the MD5 digest of a single byte slice.
 ///
-/// This is the portable scalar path. The SIMD acceleration in this crate is
-/// designed for independent-message batches; use [`Md5Many`] or [`md5_many`]
-/// when multiple messages are available at once.
+/// On x86-64 this uses an optimized scalar compression backend; other targets
+/// use the portable Rust compressor. SIMD acceleration is reserved for
+/// independent-message batches; use [`Md5Many`] or [`md5_many`] when multiple
+/// messages are available at once.
 #[must_use]
 pub fn md5(input: &[u8]) -> Md5Digest {
     scalar::hash(input)
@@ -83,9 +85,10 @@ impl Md5Many {
 
     /// Hash many independent messages into `outputs`.
     ///
-    /// Contiguous groups whose inputs have the same length use a streamlined
-    /// SIMD path. Mixed-length lanes advance together; each lane's digest is
-    /// materialized as soon as that message reaches its final padded block.
+    /// Equal-length groups use specialized whole-stream SIMD kernels. Mixed
+    /// groups process their common full-block prefix at SIMD speed and only
+    /// diverge for the tail; skewed groups may be repartitioned to avoid
+    /// wasting lanes on already-finished messages.
     ///
     /// # Panics
     ///
@@ -220,6 +223,54 @@ mod tests {
         }
     }
 
+    #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
+    #[test]
+    fn x86_triple_batches_match_reference() {
+        let detected = fearless_simd::Level::new();
+
+        if let Some(avx2) = detected.as_avx2() {
+            let engine = Md5Many::from_level(fearless_simd::Level::Avx2(avx2));
+            for mixed in [false, true] {
+                let storage: std::vec::Vec<std::vec::Vec<u8>> = (0..24)
+                    .map(|lane| {
+                        let len = if mixed { 4096 - lane * 8 } else { 4096 };
+                        (0..len).map(|i| (lane * 31 + i * 11) as u8).collect()
+                    })
+                    .collect();
+                let inputs: std::vec::Vec<&[u8]> =
+                    storage.iter().map(std::vec::Vec::as_slice).collect();
+                let mut outputs = std::vec![[0u8; 16]; inputs.len()];
+                engine.hash_many(&inputs, &mut outputs);
+                for (lane, (input, output)) in inputs.iter().zip(&outputs).enumerate() {
+                    assert_eq!(*output, reference(input), "avx2 mixed={mixed} lane={lane}");
+                }
+            }
+        }
+
+        if let Some(avx512) = detected.as_avx512() {
+            let engine = Md5Many::from_level(fearless_simd::Level::Avx512(avx512));
+            for mixed in [false, true] {
+                let storage: std::vec::Vec<std::vec::Vec<u8>> = (0..48)
+                    .map(|lane| {
+                        let len = if mixed { 4096 - lane * 4 } else { 4096 };
+                        (0..len).map(|i| (lane * 17 + i * 13) as u8).collect()
+                    })
+                    .collect();
+                let inputs: std::vec::Vec<&[u8]> =
+                    storage.iter().map(std::vec::Vec::as_slice).collect();
+                let mut outputs = std::vec![[0u8; 16]; inputs.len()];
+                engine.hash_many(&inputs, &mut outputs);
+                for (lane, (input, output)) in inputs.iter().zip(&outputs).enumerate() {
+                    assert_eq!(
+                        *output,
+                        reference(input),
+                        "avx512 mixed={mixed} lane={lane}"
+                    );
+                }
+            }
+        }
+    }
+
     #[cfg(any(feature = "std", target_arch = "wasm32"))]
     #[test]
     fn many_padding_boundaries_match_reference() {
@@ -270,6 +321,41 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "std")]
+    #[test]
+    fn large_dual_batches_and_skew_partition_match_reference() {
+        let engine = Md5Many::new();
+
+        // Covers repeated dual-batch scheduling beyond one native pair.
+        let equal_storage: std::vec::Vec<std::vec::Vec<u8>> = (0..64)
+            .map(|lane| (0..1025).map(|i| (lane * 29 + i * 7) as u8).collect())
+            .collect();
+        let equal_inputs: std::vec::Vec<&[u8]> =
+            equal_storage.iter().map(std::vec::Vec::as_slice).collect();
+        let mut outputs = std::vec![[0u8; 16]; equal_inputs.len()];
+        engine.hash_many(&equal_inputs, &mut outputs);
+        for (lane, (input, output)) in equal_inputs.iter().zip(&outputs).enumerate() {
+            assert_eq!(*output, reference(input), "equal lane={lane}");
+        }
+
+        // Alternating short/long messages forces the no-alloc skew planner to
+        // repartition each dual candidate, then scatter digests back to the
+        // caller's original order.
+        let mixed_storage: std::vec::Vec<std::vec::Vec<u8>> = (0..64)
+            .map(|lane| {
+                let len = if lane % 2 == 0 { 1024 } else { 16 * 1024 };
+                (0..len).map(|i| (lane * 17 + i * 11) as u8).collect()
+            })
+            .collect();
+        let mixed_inputs: std::vec::Vec<&[u8]> =
+            mixed_storage.iter().map(std::vec::Vec::as_slice).collect();
+        outputs.fill([0u8; 16]);
+        engine.hash_many(&mixed_inputs, &mut outputs);
+        for (lane, (input, output)) in mixed_inputs.iter().zip(&outputs).enumerate() {
+            assert_eq!(*output, reference(input), "mixed lane={lane}");
+        }
+    }
+
     #[cfg(any(feature = "std", target_arch = "wasm32"))]
     proptest::proptest! {
         #![proptest_config(proptest::test_runner::Config::with_cases(64))]
@@ -278,7 +364,7 @@ mod tests {
         fn random_batches_match_reference(
             messages in proptest::collection::vec(
                 proptest::collection::vec(proptest::prelude::any::<u8>(), 0..513),
-                0..17,
+                0..65,
             )
         ) {
             let inputs: std::vec::Vec<&[u8]> = messages.iter().map(std::vec::Vec::as_slice).collect();
