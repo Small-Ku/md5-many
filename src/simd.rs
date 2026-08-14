@@ -32,39 +32,77 @@ use crate::scalar;
 const MAX_LANES: usize = 16;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[derive(Clone, Copy, PartialEq, Eq)]
+#[repr(u8)]
+enum X86TuningClass {
+    Generic = 1,
+    AmdFamily19h = 2,
+    IntelFamily06ModelCf = 3,
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline]
-fn amd_family_19h() -> bool {
+fn x86_tuning_class() -> X86TuningClass {
     use core::sync::atomic::{AtomicU8, Ordering};
 
-    // 0 = unknown, 1 = no, 2 = yes. CPUID is serializing enough to matter for
-    // short hashes, so detect once and keep this tuning decision out of the hot path.
+    // 0 = unknown. CPUID is serializing enough to matter for short hashes, so
+    // classify once and keep model-specific crossover decisions out of the hot path.
     static CACHED: AtomicU8 = AtomicU8::new(0);
     match CACHED.load(Ordering::Relaxed) {
-        1 => return false,
-        2 => return true,
+        1 => return X86TuningClass::Generic,
+        2 => return X86TuningClass::AmdFamily19h,
+        3 => return X86TuningClass::IntelFamily06ModelCf,
         _ => {}
     }
 
     // x86/x86_64 always supports the basic CPUID leaves queried here.
     let leaf0 = __cpuid(0);
+    let leaf1 = __cpuid(1);
+    let base_family = (leaf1.eax >> 8) & 0x0f;
+    let ext_family = (leaf1.eax >> 20) & 0xff;
+    let family = if base_family == 0x0f {
+        base_family + ext_family
+    } else {
+        base_family
+    };
+    let base_model = (leaf1.eax >> 4) & 0x0f;
+    let ext_model = (leaf1.eax >> 16) & 0x0f;
+    let model = if base_family == 0x06 || base_family == 0x0f {
+        base_model | (ext_model << 4)
+    } else {
+        base_model
+    };
+
     let authentic_amd =
         leaf0.ebx == 0x6874_7541 && leaf0.edx == 0x6974_6e65 && leaf0.ecx == 0x444d_4163;
-    let is_family_19h = if authentic_amd {
-        // Leaf 1 is part of the baseline CPUID interface.
-        let leaf1 = __cpuid(1);
-        let base_family = (leaf1.eax >> 8) & 0x0f;
-        let ext_family = (leaf1.eax >> 20) & 0xff;
-        let family = if base_family == 0x0f {
-            base_family + ext_family
-        } else {
-            base_family
-        };
-        family == 0x19
+    let genuine_intel =
+        leaf0.ebx == 0x756e_6547 && leaf0.edx == 0x4965_6e69 && leaf0.ecx == 0x6c65_746e;
+
+    let class = if authentic_amd && family == 0x19 {
+        X86TuningClass::AmdFamily19h
+    } else if genuine_intel && family == 0x06 && model == 0xcf {
+        // Deliberately narrow: the <=8-message ZMM crossover was measured on
+        // this exact model. Other AVX-512 CPUs keep the conservative AVX2
+        // small-batch path until we have measurements for them.
+        X86TuningClass::IntelFamily06ModelCf
     } else {
-        false
+        X86TuningClass::Generic
     };
-    CACHED.store(if is_family_19h { 2 } else { 1 }, Ordering::Relaxed);
-    is_family_19h
+
+    CACHED.store(class as u8, Ordering::Relaxed);
+    class
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn amd_family_19h() -> bool {
+    x86_tuning_class() == X86TuningClass::AmdFamily19h
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn intel_family_06_model_cf() -> bool {
+    x86_tuning_class() == X86TuningClass::IntelFamily06ModelCf
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -5188,7 +5226,7 @@ fn hash_mixed_len_avx2_padded(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline(always)]
 fn hash_mixed_len_avx512_padded(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
-    debug_assert!((9..=16).contains(&inputs.len()));
+    debug_assert!((2..=16).contains(&inputs.len()));
     debug_assert_eq!(inputs.len(), outputs.len());
     let active = inputs.len();
     let padded_inputs: [&[u8]; 16] =
@@ -5259,7 +5297,7 @@ fn hash_mixed_len_avx512_triple_padded(avx512: Avx512, inputs: &[&[u8]], outputs
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline(always)]
 fn hash_equal_len_avx512_padded(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
-    debug_assert!((9..=16).contains(&inputs.len()));
+    debug_assert!((2..=16).contains(&inputs.len()));
     debug_assert_eq!(inputs.len(), outputs.len());
     debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
 
@@ -5831,7 +5869,11 @@ fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) 
 
         if same_len {
             if input_chunk.len() <= 8 {
-                if input_chunk.len() == 8 {
+                let len = input_chunk[0].len();
+                let prefer_zmm = intel_family_06_model_cf() && len >= 512;
+                if prefer_zmm {
+                    hash_equal_len_avx512_padded(avx512, input_chunk, output_chunk);
+                } else if input_chunk.len() == 8 {
                     hash_equal_len_avx2_kernel(avx2, input_chunk, output_chunk);
                 } else {
                     hash_equal_len_avx2_padded(avx2, input_chunk, output_chunk);
@@ -5851,7 +5893,16 @@ fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) 
                 hash_equal_len_avx512_padded(avx512, input_chunk, output_chunk);
             }
         } else if input_chunk.len() <= 8 {
-            hash_many_avx2(avx2, input_chunk, output_chunk);
+            let min_len = input_chunk
+                .iter()
+                .map(|input| input.len())
+                .min()
+                .unwrap_or(0);
+            if intel_family_06_model_cf() && min_len >= 512 {
+                hash_mixed_len_avx512_padded(avx512, input_chunk, output_chunk);
+            } else {
+                hash_many_avx2(avx2, input_chunk, output_chunk);
+            }
         } else if input_chunk.len() == 16 {
             hash_mixed_len_avx512_kernel(avx512, input_chunk, output_chunk);
         } else {
