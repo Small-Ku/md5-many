@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       compare_ref:
-        description: Git ref to use as the baseline
+        description: Git ref to use as the baseline (defaults to the latest published prerelease)
         required: true
-        default: master
+        default: v0.1.0-alpha.2
         type: string
       scope:
         description: Benchmark scope
@@ -72,6 +72,11 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Resolve comparison SHAs
+        run: |
+          echo "PERF_BASE_SHA=$(git -C base rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "PERF_HEAD_SHA=$(git -C head rev-parse HEAD)" >> "$GITHUB_ENV"
+
       - name: Install Rust ${{ env.RUST_VERSION }}
         run: |
           rustup toolchain install "$RUST_VERSION" --profile minimal
@@ -89,7 +94,8 @@ jobs:
         env:
           PERF_BASE_TARGET: ${{ runner.temp }}/perf-base
           PERF_HEAD_TARGET: ${{ runner.temp }}/perf-head
-          PERF_BASELINE_NAME: ci-base
+          PERF_BASELINE_NAME: ci-pair
+          PERF_REPORT_ROOT: ${{ runner.temp }}/perf-report
           PERF_FILTERS: ${{ github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && 'ALL' || matrix.sentinels }}
         run: |
           head/.github/scripts/run-perf-pair.sh \
@@ -99,14 +105,16 @@ jobs:
 
       - name: Evaluate regressions
         env:
-          PERF_HEAD_TARGET: ${{ runner.temp }}/perf-head
+          PERF_REPORT_ROOT: ${{ runner.temp }}/perf-report
         run: |
           extra=()
           if [[ "${{ github.event_name }}" == workflow_dispatch && "${{ inputs.enforce }}" != true ]]; then
             extra+=(--no-fail)
           fi
           python3 head/.github/scripts/perf-guard.py \
-            "$PERF_HEAD_TARGET/criterion" \
+            "$PERF_REPORT_ROOT" \
+            --base-sha "$PERF_BASE_SHA" \
+            --head-sha "$PERF_HEAD_SHA" \
             --json-out head/perf-guard.json \
             "${extra[@]}"
 
@@ -118,6 +126,8 @@ jobs:
           path: |
             head/perf-runner.txt
             head/perf-guard.json
+            ${{ runner.temp }}/perf-report
+            ${{ runner.temp }}/perf-base/criterion
             ${{ runner.temp }}/perf-head/criterion
           if-no-files-found: warn
           retention-days: 14
