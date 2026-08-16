@@ -429,6 +429,12 @@ mod tests {
             let engine = Md5Many::from_level(fearless_simd::Level::Avx512(avx512));
             for (count, short_count) in [
                 (3, 2),
+                (4, 2),
+                (4, 3),
+                (5, 3),
+                (6, 4),
+                (7, 5),
+                (8, 6),
                 (17, 8),
                 (31, 15),
                 (33, 16),

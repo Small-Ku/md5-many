@@ -5474,16 +5474,25 @@ fn skew_partition_dynamic<const MAX: usize>(inputs: &[&[u8]]) -> Option<([usize;
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline]
-fn hash_skewed_partial_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+fn hash_skewed_partial_avx2_with_limit<const MAX: usize>(
+    avx2: Avx2,
+    inputs: &[&[u8]],
+    outputs: &mut [[u8; 16]],
+    max_long_count: usize,
+) -> bool {
     debug_assert!(!inputs.is_empty());
-    debug_assert!(inputs.len() <= 32);
+    debug_assert!(inputs.len() <= MAX);
     debug_assert_eq!(inputs.len(), outputs.len());
 
-    let Some((order, split)) = skew_partition_dynamic::<32>(inputs) else {
+    let Some((order, split)) = skew_partition_dynamic::<MAX>(inputs) else {
         return false;
     };
     let active = inputs.len();
-    let reordered_inputs: [&[u8]; 32] = core::array::from_fn(|lane| {
+    if active - split > max_long_count {
+        return false;
+    }
+
+    let reordered_inputs: [&[u8]; MAX] = core::array::from_fn(|lane| {
         let source = if lane < active {
             order[lane]
         } else {
@@ -5491,7 +5500,7 @@ fn hash_skewed_partial_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16
         };
         inputs[source]
     });
-    let mut reordered_outputs = [[0u8; 16]; 32];
+    let mut reordered_outputs = [[0u8; 16]; MAX];
     hash_many_avx2(
         avx2,
         &reordered_inputs[..split],
@@ -5506,6 +5515,22 @@ fn hash_skewed_partial_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16
         outputs[order[lane]] = reordered_outputs[lane];
     }
     true
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn hash_skewed_partial_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    hash_skewed_partial_avx2_with_limit::<32>(avx2, inputs, outputs, usize::MAX)
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn hash_skewed_small_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    // For 4-8 lane tails, splitting only helps when the long partition
+    // collapses to scalar/dual-scalar work. Leaving three or more long lanes
+    // on a recursive SIMD call adds partition overhead without removing the
+    // sparse-lane bottleneck.
+    hash_skewed_partial_avx2_with_limit::<8>(avx2, inputs, outputs, 2)
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -5758,6 +5783,15 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
         let same_len = input_chunk
             .first()
             .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
+
+        if input_chunk.len() >= 4
+            && !same_len
+            && hash_skewed_small_avx2(avx2, input_chunk, output_chunk)
+        {
+            start = end;
+            continue;
+        }
+
         let max_padded_blocks = input_chunk
             .iter()
             .map(|input| padded_blocks_for_len(input.len()))
