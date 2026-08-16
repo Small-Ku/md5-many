@@ -21,7 +21,7 @@ On x86 the specialized backend currently includes:
 - Mixed-length inputs process the common full-block prefix at full SIMD speed, then handle only divergent tails separately.
 - Partial batches can duplicate the last real input into unused lanes so they still benefit from dual/triple instruction-level parallelism instead of falling into a small tail.
 - Highly skewed mixed batches, including under-filled dual/triple candidates, are repartitioned without allocation so one short message does not force many long messages through a slow divergent tail.
-- On measured AMD family 19h x86-64 CPUs, exactly two messages use an interleaved dual-scalar GPR kernel; this also applies when skew partitioning isolates a two-message subgroup. Other x86 CPUs keep the conservative scalar/AVX2 crossover, and three or more messages continue to use SIMD.
+- On measured AMD family 19h x86-64 CPUs, two-message batches can use an interleaved dual-scalar GPR kernel. Tiny pairs always qualify; larger pairs require enough common blocks to amortize the dual setup, so extremely skewed pairs stay on the existing path. Other x86 CPUs keep the conservative scalar/AVX2 crossover, and three or more messages continue to use SIMD.
 - AVX-512 small batches remain on AVX2 by default. A narrowly measured x86 family 6/model `0xCF` tuning uses padded AVX-512 for 2-8-message equal or mixed batches once every message is at least 512 B; other AVX-512 CPUs keep the conservative AVX2 choice until measured.
 
 Little-endian AArch64 uses a separate hand-scheduled single-stream integer kernel with paired message/constant loads, `BIC`/`ORN` Boolean forms, and immediate `ROR`. Multi-buffer AArch64 hashing remains on the `fearless_simd` NEON path.

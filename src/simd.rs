@@ -105,6 +105,25 @@ fn intel_family_06_model_cf() -> bool {
     x86_tuning_class() == X86TuningClass::IntelFamily06ModelCf
 }
 
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn prefer_dual_scalar_pair(inputs: &[&[u8]]) -> bool {
+    if !amd_family_19h() || inputs.len() != 2 {
+        return false;
+    }
+
+    let blocks0 = padded_blocks_for_len(inputs[0].len());
+    let blocks1 = padded_blocks_for_len(inputs[1].len());
+    let min_blocks = core::cmp::min(blocks0, blocks1);
+    let max_blocks = core::cmp::max(blocks0, blocks1);
+
+    // Tiny pairs amortize the dual-GPR setup even when their lengths differ.
+    // For larger messages, require at least a 1:16 common-block opportunity;
+    // more extreme skew leaves too little work to overlap before the long lane
+    // falls back to the ordinary scalar compressor.
+    max_blocks <= 32 || min_blocks.saturating_mul(16) >= max_blocks
+}
+
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fearless_simd::kernel!(
     #[inline]
@@ -5678,13 +5697,8 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
             .unwrap_or(0);
         let prefer_scalar = input_chunk.len() == 2 && max_padded_blocks == 1;
 
-        // On measured AMD family 19h cores, two independent scalar GPR
-        // chains beat both an under-filled 8-lane AVX2 kernel and sequential
-        // scalar hashing. Keep this tuning deliberately narrow until other
-        // x86 families have equivalent measurements. Skew partitioning can
-        // recurse into this path for a two-message subgroup as well.
         #[cfg(target_arch = "x86_64")]
-        if input_chunk.len() == 2 && amd_family_19h() {
+        if prefer_dual_scalar_pair(input_chunk) {
             let digests = crate::scalar_x86_64_dual::hash_pair([input_chunk[0], input_chunk[1]]);
             output_chunk.copy_from_slice(&digests);
             start = end;
@@ -5879,6 +5893,14 @@ fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) 
         let same_len = input_chunk
             .first()
             .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
+
+        #[cfg(target_arch = "x86_64")]
+        if prefer_dual_scalar_pair(input_chunk) {
+            let digests = crate::scalar_x86_64_dual::hash_pair([input_chunk[0], input_chunk[1]]);
+            output_chunk.copy_from_slice(&digests);
+            start = end;
+            continue;
+        }
 
         if same_len {
             if input_chunk.len() <= 8 {

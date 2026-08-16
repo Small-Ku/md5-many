@@ -22,7 +22,7 @@ Inputs arrive message-major (AoS). Native x86 kernels load one 64-byte block per
 - Equal-length padding uses `build_padded_block` rather than byte-at-a-time synthesis.
 - A pure padding block shared by every lane is parsed once and broadcast instead of loaded/transposed N times.
 - Under-filled AVX2 dual/triple candidates duplicate a real lane rather than falling into a small tail: 9-15 messages use padded dual, 17-23 padded triple, and 26-31 equal/near-mixed batches use two dual kernels.
-- A two-message AVX2 batch uses optimized scalar hashing only when each message fits in one padded MD5 block (input length <= 55 bytes). Three or more messages prefer SIMD.
+- On measured AMD family 19h x86-64 CPUs, a two-message batch can use the interleaved dual-scalar GPR backend. Tiny pairs (<=32 padded blocks on the longer side) always qualify; larger pairs require the shorter side to have at least 1/16 as many padded blocks. This avoids paying dual setup for extreme skew. Other x86 CPUs retain the previous scalar/AVX2 crossover; three or more messages prefer SIMD.
 - On measured AMD Family 19h AVX-512 hosts, short equal 9-16-message batches (up to 17 padded blocks) use two AVX2 chains; do not broaden this heuristic to other x86 families without measurements.
 - AVX-512 hosts normally keep 2-8-message batches on AVX2. The measured x86 family 6/model `0xCF` crossover is an explicit exception: equal batches at >=512 B and mixed batches whose shortest message is >=512 B use a padded ZMM kernel. Keep this model-specific unless another CPU is benchmarked directly.
 
