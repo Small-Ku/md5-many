@@ -69,6 +69,17 @@ streaming. The upstream CC0 `md5-optimisation` AVX-512 implementation measured
 about 816.7 MB/s on the same host, so the Rust path had effectively closed the
 large implementation gap.
 
+A later GitHub-hosted run independently reproduced the improvement on another
+reported Xeon Platinum 8573C. The CI compared the published `0.1.0-alpha.2`
+commit (`812a663`) with post-alpha.2 commit `1fd51b1` on the same runner using
+the bidirectional ABBA guard. For `single-stream-1MiB/md5-many`, candidate
+execution time was **5.58% lower** in the order-normalized ABBA result. Both
+measurement orders agreed on the direction: the forward 95% confidence
+interval was **-6.11% to -2.96%**, and the reverse order-normalized interval was
+**-8.62% to -4.63%**. This is independent confirmation that keeping XMM state
+live across blocks materially improves the Intel public path rather than being
+a one-host artifact.
+
 **Dispatch consequence:** supported Intel AVX-512F/VL CPUs may use the
 single-stream AVX-512VL path. The vector-state core must remain inside an
 AVX-512 target-feature context; outlining target-feature thunks or restoring
