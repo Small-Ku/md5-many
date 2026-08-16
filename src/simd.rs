@@ -5070,6 +5070,7 @@ fn padded_blocks_for_len(len: usize) -> usize {
     full_blocks + if tail <= 55 { 1 } else { 2 }
 }
 
+#[cfg(target_arch = "x86_64")]
 #[inline(always)]
 fn build_padded_block(input: &[u8], padded_blocks: usize, block_index: usize) -> [u8; 64] {
     let mut block = [0u8; 64];
