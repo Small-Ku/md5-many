@@ -3,15 +3,16 @@
 // This interleaves two independent copies of the existing NoLEA + G-shortcut
 // schedule round-by-round. MD5 is latency-bound; two GPR state chains let the
 // out-of-order core overlap dependency bubbles without SIMD transpose or
-// vector-rotate overhead.
+// vector-rotate overhead. On the measured AMD Family 19h path, BMI1 ANDN
+// also shortens the throughput-bound G/I rounds.
 
 const BLOCK_SIZE: usize = 64;
 const STATE_WORDS: usize = 4;
 
 #[allow(clippy::many_single_char_names)]
 #[allow(clippy::too_many_lines)]
-#[inline(always)]
-pub(crate) fn compress_block_pair(
+#[target_feature(enable = "bmi1")]
+pub(crate) unsafe fn compress_block_pair_bmi1(
     states: &mut [[u32; STATE_WORDS]; 2],
     blocks: [&[u8; BLOCK_SIZE]; 2],
 ) {
@@ -63,40 +64,40 @@ pub(crate) fn compress_block_pair(
             "xor {t11:e}, {b1:e}\nadd {d1:e}, -40341101\nand {t11:e}, {a1:e}\nxor {t11:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 56]\nadd {d1:e}, {t11:e}\nrol {d1:e}, 12\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
             "xor {t10:e}, {a0:e}\nadd {c0:e}, -1502002290\nand {t10:e}, {d0:e}\nxor {t10:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0} + 60]\nadd {c0:e}, {t10:e}\nrol {c0:e}, 17\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
             "xor {t11:e}, {a1:e}\nadd {c1:e}, -1502002290\nand {t11:e}, {d1:e}\nxor {t11:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1} + 60]\nadd {c1:e}, {t11:e}\nrol {c1:e}, 17\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "xor {t10:e}, {d0:e}\nadd {b0:e}, 1236535329\nand {t10:e}, {c0:e}\nxor {t10:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 4]\nadd {b0:e}, {t10:e}\nrol {b0:e}, 22\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "xor {t11:e}, {d1:e}\nadd {b1:e}, 1236535329\nand {t11:e}, {c1:e}\nxor {t11:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 4]\nadd {b1:e}, {t11:e}\nrol {b1:e}, 22\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
-            "not {t10:e}\nadd {a0:e}, -165796510\nand {t10:e}, {c0:e}\nmov {t2:e}, {d0:e}\nadd {d0:e}, dword ptr [{m0} + 24]\nadd {a0:e}, {t10:e}\nand {t2:e}, {b0:e}\nadd {a0:e}, {t2:e}\nrol {a0:e}, 5\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
-            "not {t11:e}\nadd {a1:e}, -165796510\nand {t11:e}, {c1:e}\nmov {t2:e}, {d1:e}\nadd {d1:e}, dword ptr [{m1} + 24]\nadd {a1:e}, {t11:e}\nand {t2:e}, {b1:e}\nadd {a1:e}, {t2:e}\nrol {a1:e}, 5\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
-            "not {t10:e}\nadd {d0:e}, -1069501632\nand {t10:e}, {b0:e}\nmov {t2:e}, {c0:e}\nadd {c0:e}, dword ptr [{m0} + 44]\nadd {d0:e}, {t10:e}\nand {t2:e}, {a0:e}\nadd {d0:e}, {t2:e}\nrol {d0:e}, 9\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
-            "not {t11:e}\nadd {d1:e}, -1069501632\nand {t11:e}, {b1:e}\nmov {t2:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 44]\nadd {d1:e}, {t11:e}\nand {t2:e}, {a1:e}\nadd {d1:e}, {t2:e}\nrol {d1:e}, 9\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
-            "not {t10:e}\nadd {c0:e}, 643717713\nand {t10:e}, {a0:e}\nmov {t2:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0}]\nadd {c0:e}, {t10:e}\nand {t2:e}, {d0:e}\nadd {c0:e}, {t2:e}\nrol {c0:e}, 14\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
-            "not {t11:e}\nadd {c1:e}, 643717713\nand {t11:e}, {a1:e}\nmov {t2:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1}]\nadd {c1:e}, {t11:e}\nand {t2:e}, {d1:e}\nadd {c1:e}, {t2:e}\nrol {c1:e}, 14\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "not {t10:e}\nadd {b0:e}, -373897302\nand {t10:e}, {d0:e}\nmov {t2:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 20]\nadd {b0:e}, {t10:e}\nand {t2:e}, {c0:e}\nadd {b0:e}, {t2:e}\nrol {b0:e}, 20\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "not {t11:e}\nadd {b1:e}, -373897302\nand {t11:e}, {d1:e}\nmov {t2:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 20]\nadd {b1:e}, {t11:e}\nand {t2:e}, {c1:e}\nadd {b1:e}, {t2:e}\nrol {b1:e}, 20\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
-            "not {t10:e}\nadd {a0:e}, -701558691\nand {t10:e}, {c0:e}\nmov {t2:e}, {d0:e}\nadd {d0:e}, dword ptr [{m0} + 40]\nadd {a0:e}, {t10:e}\nand {t2:e}, {b0:e}\nadd {a0:e}, {t2:e}\nrol {a0:e}, 5\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
-            "not {t11:e}\nadd {a1:e}, -701558691\nand {t11:e}, {c1:e}\nmov {t2:e}, {d1:e}\nadd {d1:e}, dword ptr [{m1} + 40]\nadd {a1:e}, {t11:e}\nand {t2:e}, {b1:e}\nadd {a1:e}, {t2:e}\nrol {a1:e}, 5\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
-            "not {t10:e}\nadd {d0:e}, 38016083\nand {t10:e}, {b0:e}\nmov {t2:e}, {c0:e}\nadd {c0:e}, dword ptr [{m0} + 60]\nadd {d0:e}, {t10:e}\nand {t2:e}, {a0:e}\nadd {d0:e}, {t2:e}\nrol {d0:e}, 9\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
-            "not {t11:e}\nadd {d1:e}, 38016083\nand {t11:e}, {b1:e}\nmov {t2:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 60]\nadd {d1:e}, {t11:e}\nand {t2:e}, {a1:e}\nadd {d1:e}, {t2:e}\nrol {d1:e}, 9\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
-            "not {t10:e}\nadd {c0:e}, -660478335\nand {t10:e}, {a0:e}\nmov {t2:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0} + 16]\nadd {c0:e}, {t10:e}\nand {t2:e}, {d0:e}\nadd {c0:e}, {t2:e}\nrol {c0:e}, 14\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
-            "not {t11:e}\nadd {c1:e}, -660478335\nand {t11:e}, {a1:e}\nmov {t2:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1} + 16]\nadd {c1:e}, {t11:e}\nand {t2:e}, {d1:e}\nadd {c1:e}, {t2:e}\nrol {c1:e}, 14\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "not {t10:e}\nadd {b0:e}, -405537848\nand {t10:e}, {d0:e}\nmov {t2:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 36]\nadd {b0:e}, {t10:e}\nand {t2:e}, {c0:e}\nadd {b0:e}, {t2:e}\nrol {b0:e}, 20\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "not {t11:e}\nadd {b1:e}, -405537848\nand {t11:e}, {d1:e}\nmov {t2:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 36]\nadd {b1:e}, {t11:e}\nand {t2:e}, {c1:e}\nadd {b1:e}, {t2:e}\nrol {b1:e}, 20\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
-            "not {t10:e}\nadd {a0:e}, 568446438\nand {t10:e}, {c0:e}\nmov {t2:e}, {d0:e}\nadd {d0:e}, dword ptr [{m0} + 56]\nadd {a0:e}, {t10:e}\nand {t2:e}, {b0:e}\nadd {a0:e}, {t2:e}\nrol {a0:e}, 5\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
-            "not {t11:e}\nadd {a1:e}, 568446438\nand {t11:e}, {c1:e}\nmov {t2:e}, {d1:e}\nadd {d1:e}, dword ptr [{m1} + 56]\nadd {a1:e}, {t11:e}\nand {t2:e}, {b1:e}\nadd {a1:e}, {t2:e}\nrol {a1:e}, 5\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
-            "not {t10:e}\nadd {d0:e}, -1019803690\nand {t10:e}, {b0:e}\nmov {t2:e}, {c0:e}\nadd {c0:e}, dword ptr [{m0} + 12]\nadd {d0:e}, {t10:e}\nand {t2:e}, {a0:e}\nadd {d0:e}, {t2:e}\nrol {d0:e}, 9\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
-            "not {t11:e}\nadd {d1:e}, -1019803690\nand {t11:e}, {b1:e}\nmov {t2:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 12]\nadd {d1:e}, {t11:e}\nand {t2:e}, {a1:e}\nadd {d1:e}, {t2:e}\nrol {d1:e}, 9\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
-            "not {t10:e}\nadd {c0:e}, -187363961\nand {t10:e}, {a0:e}\nmov {t2:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0} + 32]\nadd {c0:e}, {t10:e}\nand {t2:e}, {d0:e}\nadd {c0:e}, {t2:e}\nrol {c0:e}, 14\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
-            "not {t11:e}\nadd {c1:e}, -187363961\nand {t11:e}, {a1:e}\nmov {t2:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1} + 32]\nadd {c1:e}, {t11:e}\nand {t2:e}, {d1:e}\nadd {c1:e}, {t2:e}\nrol {c1:e}, 14\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "not {t10:e}\nadd {b0:e}, 1163531501\nand {t10:e}, {d0:e}\nmov {t2:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 52]\nadd {b0:e}, {t10:e}\nand {t2:e}, {c0:e}\nadd {b0:e}, {t2:e}\nrol {b0:e}, 20\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "not {t11:e}\nadd {b1:e}, 1163531501\nand {t11:e}, {d1:e}\nmov {t2:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 52]\nadd {b1:e}, {t11:e}\nand {t2:e}, {c1:e}\nadd {b1:e}, {t2:e}\nrol {b1:e}, 20\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
-            "not {t10:e}\nadd {a0:e}, -1444681467\nand {t10:e}, {c0:e}\nmov {t2:e}, {d0:e}\nadd {d0:e}, dword ptr [{m0} + 8]\nadd {a0:e}, {t10:e}\nand {t2:e}, {b0:e}\nadd {a0:e}, {t2:e}\nrol {a0:e}, 5\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
-            "not {t11:e}\nadd {a1:e}, -1444681467\nand {t11:e}, {c1:e}\nmov {t2:e}, {d1:e}\nadd {d1:e}, dword ptr [{m1} + 8]\nadd {a1:e}, {t11:e}\nand {t2:e}, {b1:e}\nadd {a1:e}, {t2:e}\nrol {a1:e}, 5\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
-            "not {t10:e}\nadd {d0:e}, -51403784\nand {t10:e}, {b0:e}\nmov {t2:e}, {c0:e}\nadd {c0:e}, dword ptr [{m0} + 28]\nadd {d0:e}, {t10:e}\nand {t2:e}, {a0:e}\nadd {d0:e}, {t2:e}\nrol {d0:e}, 9\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
-            "not {t11:e}\nadd {d1:e}, -51403784\nand {t11:e}, {b1:e}\nmov {t2:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 28]\nadd {d1:e}, {t11:e}\nand {t2:e}, {a1:e}\nadd {d1:e}, {t2:e}\nrol {d1:e}, 9\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
-            "not {t10:e}\nadd {c0:e}, 1735328473\nand {t10:e}, {a0:e}\nmov {t2:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0} + 48]\nadd {c0:e}, {t10:e}\nand {t2:e}, {d0:e}\nadd {c0:e}, {t2:e}\nrol {c0:e}, 14\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
-            "not {t11:e}\nadd {c1:e}, 1735328473\nand {t11:e}, {a1:e}\nmov {t2:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1} + 48]\nadd {c1:e}, {t11:e}\nand {t2:e}, {d1:e}\nadd {c1:e}, {t2:e}\nrol {c1:e}, 14\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "not {t10:e}\nadd {b0:e}, -1926607734\nand {t10:e}, {d0:e}\nmov {t2:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 20]\nadd {b0:e}, {t10:e}\nand {t2:e}, {c0:e}\nadd {b0:e}, {t2:e}\nrol {b0:e}, 20\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "not {t11:e}\nadd {b1:e}, -1926607734\nand {t11:e}, {d1:e}\nmov {t2:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 20]\nadd {b1:e}, {t11:e}\nand {t2:e}, {c1:e}\nadd {b1:e}, {t2:e}\nrol {b1:e}, 20\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
+            "xor {t10:e}, {d0:e}\nadd {b0:e}, 1236535329\nand {t10:e}, {c0:e}\nxor {t10:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 4]\nadd {b0:e}, {t10:e}\nrol {b0:e}, 22\nadd {b0:e}, {c0:e}",
+            "xor {t11:e}, {d1:e}\nadd {b1:e}, 1236535329\nand {t11:e}, {c1:e}\nxor {t11:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 4]\nadd {b1:e}, {t11:e}\nrol {b1:e}, 22\nadd {b1:e}, {c1:e}",
+            "andn {t10:e}, {d0:e}, {c0:e}\nadd {a0:e}, -165796510\nmov {t2:e}, {d0:e}\nadd {d0:e}, dword ptr [{m0} + 24]\nadd {a0:e}, {t10:e}\nand {t2:e}, {b0:e}\nadd {a0:e}, {t2:e}\nrol {a0:e}, 5\nadd {a0:e}, {b0:e}",
+            "andn {t11:e}, {d1:e}, {c1:e}\nadd {a1:e}, -165796510\nmov {t2:e}, {d1:e}\nadd {d1:e}, dword ptr [{m1} + 24]\nadd {a1:e}, {t11:e}\nand {t2:e}, {b1:e}\nadd {a1:e}, {t2:e}\nrol {a1:e}, 5\nadd {a1:e}, {b1:e}",
+            "andn {t10:e}, {c0:e}, {b0:e}\nadd {d0:e}, -1069501632\nmov {t2:e}, {c0:e}\nadd {c0:e}, dword ptr [{m0} + 44]\nadd {d0:e}, {t10:e}\nand {t2:e}, {a0:e}\nadd {d0:e}, {t2:e}\nrol {d0:e}, 9\nadd {d0:e}, {a0:e}",
+            "andn {t11:e}, {c1:e}, {b1:e}\nadd {d1:e}, -1069501632\nmov {t2:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 44]\nadd {d1:e}, {t11:e}\nand {t2:e}, {a1:e}\nadd {d1:e}, {t2:e}\nrol {d1:e}, 9\nadd {d1:e}, {a1:e}",
+            "andn {t10:e}, {b0:e}, {a0:e}\nadd {c0:e}, 643717713\nmov {t2:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0}]\nadd {c0:e}, {t10:e}\nand {t2:e}, {d0:e}\nadd {c0:e}, {t2:e}\nrol {c0:e}, 14\nadd {c0:e}, {d0:e}",
+            "andn {t11:e}, {b1:e}, {a1:e}\nadd {c1:e}, 643717713\nmov {t2:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1}]\nadd {c1:e}, {t11:e}\nand {t2:e}, {d1:e}\nadd {c1:e}, {t2:e}\nrol {c1:e}, 14\nadd {c1:e}, {d1:e}",
+            "andn {t10:e}, {a0:e}, {d0:e}\nadd {b0:e}, -373897302\nmov {t2:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 20]\nadd {b0:e}, {t10:e}\nand {t2:e}, {c0:e}\nadd {b0:e}, {t2:e}\nrol {b0:e}, 20\nadd {b0:e}, {c0:e}",
+            "andn {t11:e}, {a1:e}, {d1:e}\nadd {b1:e}, -373897302\nmov {t2:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 20]\nadd {b1:e}, {t11:e}\nand {t2:e}, {c1:e}\nadd {b1:e}, {t2:e}\nrol {b1:e}, 20\nadd {b1:e}, {c1:e}",
+            "andn {t10:e}, {d0:e}, {c0:e}\nadd {a0:e}, -701558691\nmov {t2:e}, {d0:e}\nadd {d0:e}, dword ptr [{m0} + 40]\nadd {a0:e}, {t10:e}\nand {t2:e}, {b0:e}\nadd {a0:e}, {t2:e}\nrol {a0:e}, 5\nadd {a0:e}, {b0:e}",
+            "andn {t11:e}, {d1:e}, {c1:e}\nadd {a1:e}, -701558691\nmov {t2:e}, {d1:e}\nadd {d1:e}, dword ptr [{m1} + 40]\nadd {a1:e}, {t11:e}\nand {t2:e}, {b1:e}\nadd {a1:e}, {t2:e}\nrol {a1:e}, 5\nadd {a1:e}, {b1:e}",
+            "andn {t10:e}, {c0:e}, {b0:e}\nadd {d0:e}, 38016083\nmov {t2:e}, {c0:e}\nadd {c0:e}, dword ptr [{m0} + 60]\nadd {d0:e}, {t10:e}\nand {t2:e}, {a0:e}\nadd {d0:e}, {t2:e}\nrol {d0:e}, 9\nadd {d0:e}, {a0:e}",
+            "andn {t11:e}, {c1:e}, {b1:e}\nadd {d1:e}, 38016083\nmov {t2:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 60]\nadd {d1:e}, {t11:e}\nand {t2:e}, {a1:e}\nadd {d1:e}, {t2:e}\nrol {d1:e}, 9\nadd {d1:e}, {a1:e}",
+            "andn {t10:e}, {b0:e}, {a0:e}\nadd {c0:e}, -660478335\nmov {t2:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0} + 16]\nadd {c0:e}, {t10:e}\nand {t2:e}, {d0:e}\nadd {c0:e}, {t2:e}\nrol {c0:e}, 14\nadd {c0:e}, {d0:e}",
+            "andn {t11:e}, {b1:e}, {a1:e}\nadd {c1:e}, -660478335\nmov {t2:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1} + 16]\nadd {c1:e}, {t11:e}\nand {t2:e}, {d1:e}\nadd {c1:e}, {t2:e}\nrol {c1:e}, 14\nadd {c1:e}, {d1:e}",
+            "andn {t10:e}, {a0:e}, {d0:e}\nadd {b0:e}, -405537848\nmov {t2:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 36]\nadd {b0:e}, {t10:e}\nand {t2:e}, {c0:e}\nadd {b0:e}, {t2:e}\nrol {b0:e}, 20\nadd {b0:e}, {c0:e}",
+            "andn {t11:e}, {a1:e}, {d1:e}\nadd {b1:e}, -405537848\nmov {t2:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 36]\nadd {b1:e}, {t11:e}\nand {t2:e}, {c1:e}\nadd {b1:e}, {t2:e}\nrol {b1:e}, 20\nadd {b1:e}, {c1:e}",
+            "andn {t10:e}, {d0:e}, {c0:e}\nadd {a0:e}, 568446438\nmov {t2:e}, {d0:e}\nadd {d0:e}, dword ptr [{m0} + 56]\nadd {a0:e}, {t10:e}\nand {t2:e}, {b0:e}\nadd {a0:e}, {t2:e}\nrol {a0:e}, 5\nadd {a0:e}, {b0:e}",
+            "andn {t11:e}, {d1:e}, {c1:e}\nadd {a1:e}, 568446438\nmov {t2:e}, {d1:e}\nadd {d1:e}, dword ptr [{m1} + 56]\nadd {a1:e}, {t11:e}\nand {t2:e}, {b1:e}\nadd {a1:e}, {t2:e}\nrol {a1:e}, 5\nadd {a1:e}, {b1:e}",
+            "andn {t10:e}, {c0:e}, {b0:e}\nadd {d0:e}, -1019803690\nmov {t2:e}, {c0:e}\nadd {c0:e}, dword ptr [{m0} + 12]\nadd {d0:e}, {t10:e}\nand {t2:e}, {a0:e}\nadd {d0:e}, {t2:e}\nrol {d0:e}, 9\nadd {d0:e}, {a0:e}",
+            "andn {t11:e}, {c1:e}, {b1:e}\nadd {d1:e}, -1019803690\nmov {t2:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 12]\nadd {d1:e}, {t11:e}\nand {t2:e}, {a1:e}\nadd {d1:e}, {t2:e}\nrol {d1:e}, 9\nadd {d1:e}, {a1:e}",
+            "andn {t10:e}, {b0:e}, {a0:e}\nadd {c0:e}, -187363961\nmov {t2:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0} + 32]\nadd {c0:e}, {t10:e}\nand {t2:e}, {d0:e}\nadd {c0:e}, {t2:e}\nrol {c0:e}, 14\nadd {c0:e}, {d0:e}",
+            "andn {t11:e}, {b1:e}, {a1:e}\nadd {c1:e}, -187363961\nmov {t2:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1} + 32]\nadd {c1:e}, {t11:e}\nand {t2:e}, {d1:e}\nadd {c1:e}, {t2:e}\nrol {c1:e}, 14\nadd {c1:e}, {d1:e}",
+            "andn {t10:e}, {a0:e}, {d0:e}\nadd {b0:e}, 1163531501\nmov {t2:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 52]\nadd {b0:e}, {t10:e}\nand {t2:e}, {c0:e}\nadd {b0:e}, {t2:e}\nrol {b0:e}, 20\nadd {b0:e}, {c0:e}",
+            "andn {t11:e}, {a1:e}, {d1:e}\nadd {b1:e}, 1163531501\nmov {t2:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 52]\nadd {b1:e}, {t11:e}\nand {t2:e}, {c1:e}\nadd {b1:e}, {t2:e}\nrol {b1:e}, 20\nadd {b1:e}, {c1:e}",
+            "andn {t10:e}, {d0:e}, {c0:e}\nadd {a0:e}, -1444681467\nmov {t2:e}, {d0:e}\nadd {d0:e}, dword ptr [{m0} + 8]\nadd {a0:e}, {t10:e}\nand {t2:e}, {b0:e}\nadd {a0:e}, {t2:e}\nrol {a0:e}, 5\nadd {a0:e}, {b0:e}",
+            "andn {t11:e}, {d1:e}, {c1:e}\nadd {a1:e}, -1444681467\nmov {t2:e}, {d1:e}\nadd {d1:e}, dword ptr [{m1} + 8]\nadd {a1:e}, {t11:e}\nand {t2:e}, {b1:e}\nadd {a1:e}, {t2:e}\nrol {a1:e}, 5\nadd {a1:e}, {b1:e}",
+            "andn {t10:e}, {c0:e}, {b0:e}\nadd {d0:e}, -51403784\nmov {t2:e}, {c0:e}\nadd {c0:e}, dword ptr [{m0} + 28]\nadd {d0:e}, {t10:e}\nand {t2:e}, {a0:e}\nadd {d0:e}, {t2:e}\nrol {d0:e}, 9\nadd {d0:e}, {a0:e}",
+            "andn {t11:e}, {c1:e}, {b1:e}\nadd {d1:e}, -51403784\nmov {t2:e}, {c1:e}\nadd {c1:e}, dword ptr [{m1} + 28]\nadd {d1:e}, {t11:e}\nand {t2:e}, {a1:e}\nadd {d1:e}, {t2:e}\nrol {d1:e}, 9\nadd {d1:e}, {a1:e}",
+            "andn {t10:e}, {b0:e}, {a0:e}\nadd {c0:e}, 1735328473\nmov {t2:e}, {b0:e}\nadd {b0:e}, dword ptr [{m0} + 48]\nadd {c0:e}, {t10:e}\nand {t2:e}, {d0:e}\nadd {c0:e}, {t2:e}\nrol {c0:e}, 14\nadd {c0:e}, {d0:e}",
+            "andn {t11:e}, {b1:e}, {a1:e}\nadd {c1:e}, 1735328473\nmov {t2:e}, {b1:e}\nadd {b1:e}, dword ptr [{m1} + 48]\nadd {c1:e}, {t11:e}\nand {t2:e}, {d1:e}\nadd {c1:e}, {t2:e}\nrol {c1:e}, 14\nadd {c1:e}, {d1:e}",
+            "andn {t10:e}, {a0:e}, {d0:e}\nadd {b0:e}, -1926607734\nmov {t2:e}, {a0:e}\nadd {a0:e}, dword ptr [{m0} + 20]\nadd {b0:e}, {t10:e}\nand {t2:e}, {c0:e}\nadd {b0:e}, {t2:e}\nrol {b0:e}, 20\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
+            "andn {t11:e}, {a1:e}, {d1:e}\nadd {b1:e}, -1926607734\nmov {t2:e}, {a1:e}\nadd {a1:e}, dword ptr [{m1} + 20]\nadd {b1:e}, {t11:e}\nand {t2:e}, {c1:e}\nadd {b1:e}, {t2:e}\nrol {b1:e}, 20\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
             "xor {t10:e}, {c0:e}\nadd {a0:e}, -378558\nadd {d0:e}, dword ptr [{m0} + 32]\nxor {t10:e}, {b0:e}\nadd {a0:e}, {t10:e}\nrol {a0:e}, 4\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
             "xor {t11:e}, {c1:e}\nadd {a1:e}, -378558\nadd {d1:e}, dword ptr [{m1} + 32]\nxor {t11:e}, {b1:e}\nadd {a1:e}, {t11:e}\nrol {a1:e}, 4\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
             "xor {t10:e}, {b0:e}\nadd {d0:e}, -2022574463\nadd {c0:e}, dword ptr [{m0} + 44]\nxor {t10:e}, {a0:e}\nadd {d0:e}, {t10:e}\nrol {d0:e}, 11\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
@@ -127,40 +128,40 @@ pub(crate) fn compress_block_pair(
             "xor {t11:e}, {b1:e}\nadd {d1:e}, -421815835\nadd {c1:e}, dword ptr [{m1} + 60]\nxor {t11:e}, {a1:e}\nadd {d1:e}, {t11:e}\nrol {d1:e}, 11\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
             "xor {t10:e}, {a0:e}\nadd {c0:e}, 530742520\nadd {b0:e}, dword ptr [{m0} + 8]\nxor {t10:e}, {d0:e}\nadd {c0:e}, {t10:e}\nrol {c0:e}, 16\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
             "xor {t11:e}, {a1:e}\nadd {c1:e}, 530742520\nadd {b1:e}, dword ptr [{m1} + 8]\nxor {t11:e}, {d1:e}\nadd {c1:e}, {t11:e}\nrol {c1:e}, 16\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "xor {t10:e}, {d0:e}\nadd {b0:e}, -995338651\nadd {a0:e}, dword ptr [{m0}]\nxor {t10:e}, {c0:e}\nadd {b0:e}, {t10:e}\nrol {b0:e}, 23\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "xor {t11:e}, {d1:e}\nadd {b1:e}, -995338651\nadd {a1:e}, dword ptr [{m1}]\nxor {t11:e}, {c1:e}\nadd {b1:e}, {t11:e}\nrol {b1:e}, 23\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
-            "not {t10:e}\nadd {a0:e}, -198630844\nadd {d0:e}, dword ptr [{m0} + 28]\nor {t10:e}, {b0:e}\nxor {t10:e}, {c0:e}\nadd {a0:e}, {t10:e}\nrol {a0:e}, 6\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
-            "not {t11:e}\nadd {a1:e}, -198630844\nadd {d1:e}, dword ptr [{m1} + 28]\nor {t11:e}, {b1:e}\nxor {t11:e}, {c1:e}\nadd {a1:e}, {t11:e}\nrol {a1:e}, 6\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
-            "not {t10:e}\nadd {d0:e}, 1126891415\nadd {c0:e}, dword ptr [{m0} + 56]\nor {t10:e}, {a0:e}\nxor {t10:e}, {b0:e}\nadd {d0:e}, {t10:e}\nrol {d0:e}, 10\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
-            "not {t11:e}\nadd {d1:e}, 1126891415\nadd {c1:e}, dword ptr [{m1} + 56]\nor {t11:e}, {a1:e}\nxor {t11:e}, {b1:e}\nadd {d1:e}, {t11:e}\nrol {d1:e}, 10\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
-            "not {t10:e}\nadd {c0:e}, -1416354905\nadd {b0:e}, dword ptr [{m0} + 20]\nor {t10:e}, {d0:e}\nxor {t10:e}, {a0:e}\nadd {c0:e}, {t10:e}\nrol {c0:e}, 15\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
-            "not {t11:e}\nadd {c1:e}, -1416354905\nadd {b1:e}, dword ptr [{m1} + 20]\nor {t11:e}, {d1:e}\nxor {t11:e}, {a1:e}\nadd {c1:e}, {t11:e}\nrol {c1:e}, 15\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "not {t10:e}\nadd {b0:e}, -57434055\nadd {a0:e}, dword ptr [{m0} + 48]\nor {t10:e}, {c0:e}\nxor {t10:e}, {d0:e}\nadd {b0:e}, {t10:e}\nrol {b0:e}, 21\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "not {t11:e}\nadd {b1:e}, -57434055\nadd {a1:e}, dword ptr [{m1} + 48]\nor {t11:e}, {c1:e}\nxor {t11:e}, {d1:e}\nadd {b1:e}, {t11:e}\nrol {b1:e}, 21\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
-            "not {t10:e}\nadd {a0:e}, 1700485571\nadd {d0:e}, dword ptr [{m0} + 12]\nor {t10:e}, {b0:e}\nxor {t10:e}, {c0:e}\nadd {a0:e}, {t10:e}\nrol {a0:e}, 6\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
-            "not {t11:e}\nadd {a1:e}, 1700485571\nadd {d1:e}, dword ptr [{m1} + 12]\nor {t11:e}, {b1:e}\nxor {t11:e}, {c1:e}\nadd {a1:e}, {t11:e}\nrol {a1:e}, 6\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
-            "not {t10:e}\nadd {d0:e}, -1894986606\nadd {c0:e}, dword ptr [{m0} + 40]\nor {t10:e}, {a0:e}\nxor {t10:e}, {b0:e}\nadd {d0:e}, {t10:e}\nrol {d0:e}, 10\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
-            "not {t11:e}\nadd {d1:e}, -1894986606\nadd {c1:e}, dword ptr [{m1} + 40]\nor {t11:e}, {a1:e}\nxor {t11:e}, {b1:e}\nadd {d1:e}, {t11:e}\nrol {d1:e}, 10\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
-            "not {t10:e}\nadd {c0:e}, -1051523\nadd {b0:e}, dword ptr [{m0} + 4]\nor {t10:e}, {d0:e}\nxor {t10:e}, {a0:e}\nadd {c0:e}, {t10:e}\nrol {c0:e}, 15\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
-            "not {t11:e}\nadd {c1:e}, -1051523\nadd {b1:e}, dword ptr [{m1} + 4]\nor {t11:e}, {d1:e}\nxor {t11:e}, {a1:e}\nadd {c1:e}, {t11:e}\nrol {c1:e}, 15\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "not {t10:e}\nadd {b0:e}, -2054922799\nadd {a0:e}, dword ptr [{m0} + 32]\nor {t10:e}, {c0:e}\nxor {t10:e}, {d0:e}\nadd {b0:e}, {t10:e}\nrol {b0:e}, 21\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "not {t11:e}\nadd {b1:e}, -2054922799\nadd {a1:e}, dword ptr [{m1} + 32]\nor {t11:e}, {c1:e}\nxor {t11:e}, {d1:e}\nadd {b1:e}, {t11:e}\nrol {b1:e}, 21\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
-            "not {t10:e}\nadd {a0:e}, 1873313359\nadd {d0:e}, dword ptr [{m0} + 60]\nor {t10:e}, {b0:e}\nxor {t10:e}, {c0:e}\nadd {a0:e}, {t10:e}\nrol {a0:e}, 6\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
-            "not {t11:e}\nadd {a1:e}, 1873313359\nadd {d1:e}, dword ptr [{m1} + 60]\nor {t11:e}, {b1:e}\nxor {t11:e}, {c1:e}\nadd {a1:e}, {t11:e}\nrol {a1:e}, 6\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
-            "not {t10:e}\nadd {d0:e}, -30611744\nadd {c0:e}, dword ptr [{m0} + 24]\nor {t10:e}, {a0:e}\nxor {t10:e}, {b0:e}\nadd {d0:e}, {t10:e}\nrol {d0:e}, 10\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
-            "not {t11:e}\nadd {d1:e}, -30611744\nadd {c1:e}, dword ptr [{m1} + 24]\nor {t11:e}, {a1:e}\nxor {t11:e}, {b1:e}\nadd {d1:e}, {t11:e}\nrol {d1:e}, 10\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
-            "not {t10:e}\nadd {c0:e}, -1560198380\nadd {b0:e}, dword ptr [{m0} + 52]\nor {t10:e}, {d0:e}\nxor {t10:e}, {a0:e}\nadd {c0:e}, {t10:e}\nrol {c0:e}, 15\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
-            "not {t11:e}\nadd {c1:e}, -1560198380\nadd {b1:e}, dword ptr [{m1} + 52]\nor {t11:e}, {d1:e}\nxor {t11:e}, {a1:e}\nadd {c1:e}, {t11:e}\nrol {c1:e}, 15\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "not {t10:e}\nadd {b0:e}, 1309151649\nadd {a0:e}, dword ptr [{m0} + 16]\nor {t10:e}, {c0:e}\nxor {t10:e}, {d0:e}\nadd {b0:e}, {t10:e}\nrol {b0:e}, 21\nmov {t10:e}, {d0:e}\nadd {b0:e}, {c0:e}",
-            "not {t11:e}\nadd {b1:e}, 1309151649\nadd {a1:e}, dword ptr [{m1} + 16]\nor {t11:e}, {c1:e}\nxor {t11:e}, {d1:e}\nadd {b1:e}, {t11:e}\nrol {b1:e}, 21\nmov {t11:e}, {d1:e}\nadd {b1:e}, {c1:e}",
-            "not {t10:e}\nadd {a0:e}, -145523070\nadd {d0:e}, dword ptr [{m0} + 44]\nor {t10:e}, {b0:e}\nxor {t10:e}, {c0:e}\nadd {a0:e}, {t10:e}\nrol {a0:e}, 6\nmov {t10:e}, {c0:e}\nadd {a0:e}, {b0:e}",
-            "not {t11:e}\nadd {a1:e}, -145523070\nadd {d1:e}, dword ptr [{m1} + 44]\nor {t11:e}, {b1:e}\nxor {t11:e}, {c1:e}\nadd {a1:e}, {t11:e}\nrol {a1:e}, 6\nmov {t11:e}, {c1:e}\nadd {a1:e}, {b1:e}",
-            "not {t10:e}\nadd {d0:e}, -1120210379\nadd {c0:e}, dword ptr [{m0} + 8]\nor {t10:e}, {a0:e}\nxor {t10:e}, {b0:e}\nadd {d0:e}, {t10:e}\nrol {d0:e}, 10\nmov {t10:e}, {b0:e}\nadd {d0:e}, {a0:e}",
-            "not {t11:e}\nadd {d1:e}, -1120210379\nadd {c1:e}, dword ptr [{m1} + 8]\nor {t11:e}, {a1:e}\nxor {t11:e}, {b1:e}\nadd {d1:e}, {t11:e}\nrol {d1:e}, 10\nmov {t11:e}, {b1:e}\nadd {d1:e}, {a1:e}",
-            "not {t10:e}\nadd {c0:e}, 718787259\nadd {b0:e}, dword ptr [{m0} + 36]\nor {t10:e}, {d0:e}\nxor {t10:e}, {a0:e}\nadd {c0:e}, {t10:e}\nrol {c0:e}, 15\nmov {t10:e}, {a0:e}\nadd {c0:e}, {d0:e}",
-            "not {t11:e}\nadd {c1:e}, 718787259\nadd {b1:e}, dword ptr [{m1} + 36]\nor {t11:e}, {d1:e}\nxor {t11:e}, {a1:e}\nadd {c1:e}, {t11:e}\nrol {c1:e}, 15\nmov {t11:e}, {a1:e}\nadd {c1:e}, {d1:e}",
-            "not {t10:e}\nadd {b0:e}, -343485551\nor {t10:e}, {c0:e}\nxor {t10:e}, {d0:e}\nadd {b0:e}, {t10:e}\nrol {b0:e}, 21\nadd {b0:e}, {c0:e}",
-            "not {t11:e}\nadd {b1:e}, -343485551\nor {t11:e}, {c1:e}\nxor {t11:e}, {d1:e}\nadd {b1:e}, {t11:e}\nrol {b1:e}, 21\nadd {b1:e}, {c1:e}",
+            "xor {t10:e}, {d0:e}\nadd {b0:e}, -995338651\nadd {a0:e}, dword ptr [{m0}]\nxor {t10:e}, {c0:e}\nadd {b0:e}, {t10:e}\nrol {b0:e}, 23\nadd {b0:e}, {c0:e}",
+            "xor {t11:e}, {d1:e}\nadd {b1:e}, -995338651\nadd {a1:e}, dword ptr [{m1}]\nxor {t11:e}, {c1:e}\nadd {b1:e}, {t11:e}\nrol {b1:e}, 23\nadd {b1:e}, {c1:e}",
+            "andn {t10:e}, {b0:e}, {d0:e}\nxor {t10:e}, {c0:e}\nadd {a0:e}, -198630845\nadd {d0:e}, dword ptr [{m0} + 28]\nsub {a0:e}, {t10:e}\nrol {a0:e}, 6\nadd {a0:e}, {b0:e}",
+            "andn {t11:e}, {b1:e}, {d1:e}\nxor {t11:e}, {c1:e}\nadd {a1:e}, -198630845\nadd {d1:e}, dword ptr [{m1} + 28]\nsub {a1:e}, {t11:e}\nrol {a1:e}, 6\nadd {a1:e}, {b1:e}",
+            "andn {t10:e}, {a0:e}, {c0:e}\nxor {t10:e}, {b0:e}\nadd {d0:e}, 1126891414\nadd {c0:e}, dword ptr [{m0} + 56]\nsub {d0:e}, {t10:e}\nrol {d0:e}, 10\nadd {d0:e}, {a0:e}",
+            "andn {t11:e}, {a1:e}, {c1:e}\nxor {t11:e}, {b1:e}\nadd {d1:e}, 1126891414\nadd {c1:e}, dword ptr [{m1} + 56]\nsub {d1:e}, {t11:e}\nrol {d1:e}, 10\nadd {d1:e}, {a1:e}",
+            "andn {t10:e}, {d0:e}, {b0:e}\nxor {t10:e}, {a0:e}\nadd {c0:e}, -1416354906\nadd {b0:e}, dword ptr [{m0} + 20]\nsub {c0:e}, {t10:e}\nrol {c0:e}, 15\nadd {c0:e}, {d0:e}",
+            "andn {t11:e}, {d1:e}, {b1:e}\nxor {t11:e}, {a1:e}\nadd {c1:e}, -1416354906\nadd {b1:e}, dword ptr [{m1} + 20]\nsub {c1:e}, {t11:e}\nrol {c1:e}, 15\nadd {c1:e}, {d1:e}",
+            "andn {t10:e}, {c0:e}, {a0:e}\nxor {t10:e}, {d0:e}\nadd {b0:e}, -57434056\nadd {a0:e}, dword ptr [{m0} + 48]\nsub {b0:e}, {t10:e}\nrol {b0:e}, 21\nadd {b0:e}, {c0:e}",
+            "andn {t11:e}, {c1:e}, {a1:e}\nxor {t11:e}, {d1:e}\nadd {b1:e}, -57434056\nadd {a1:e}, dword ptr [{m1} + 48]\nsub {b1:e}, {t11:e}\nrol {b1:e}, 21\nadd {b1:e}, {c1:e}",
+            "andn {t10:e}, {b0:e}, {d0:e}\nxor {t10:e}, {c0:e}\nadd {a0:e}, 1700485570\nadd {d0:e}, dword ptr [{m0} + 12]\nsub {a0:e}, {t10:e}\nrol {a0:e}, 6\nadd {a0:e}, {b0:e}",
+            "andn {t11:e}, {b1:e}, {d1:e}\nxor {t11:e}, {c1:e}\nadd {a1:e}, 1700485570\nadd {d1:e}, dword ptr [{m1} + 12]\nsub {a1:e}, {t11:e}\nrol {a1:e}, 6\nadd {a1:e}, {b1:e}",
+            "andn {t10:e}, {a0:e}, {c0:e}\nxor {t10:e}, {b0:e}\nadd {d0:e}, -1894986607\nadd {c0:e}, dword ptr [{m0} + 40]\nsub {d0:e}, {t10:e}\nrol {d0:e}, 10\nadd {d0:e}, {a0:e}",
+            "andn {t11:e}, {a1:e}, {c1:e}\nxor {t11:e}, {b1:e}\nadd {d1:e}, -1894986607\nadd {c1:e}, dword ptr [{m1} + 40]\nsub {d1:e}, {t11:e}\nrol {d1:e}, 10\nadd {d1:e}, {a1:e}",
+            "andn {t10:e}, {d0:e}, {b0:e}\nxor {t10:e}, {a0:e}\nadd {c0:e}, -1051524\nadd {b0:e}, dword ptr [{m0} + 4]\nsub {c0:e}, {t10:e}\nrol {c0:e}, 15\nadd {c0:e}, {d0:e}",
+            "andn {t11:e}, {d1:e}, {b1:e}\nxor {t11:e}, {a1:e}\nadd {c1:e}, -1051524\nadd {b1:e}, dword ptr [{m1} + 4]\nsub {c1:e}, {t11:e}\nrol {c1:e}, 15\nadd {c1:e}, {d1:e}",
+            "andn {t10:e}, {c0:e}, {a0:e}\nxor {t10:e}, {d0:e}\nadd {b0:e}, -2054922800\nadd {a0:e}, dword ptr [{m0} + 32]\nsub {b0:e}, {t10:e}\nrol {b0:e}, 21\nadd {b0:e}, {c0:e}",
+            "andn {t11:e}, {c1:e}, {a1:e}\nxor {t11:e}, {d1:e}\nadd {b1:e}, -2054922800\nadd {a1:e}, dword ptr [{m1} + 32]\nsub {b1:e}, {t11:e}\nrol {b1:e}, 21\nadd {b1:e}, {c1:e}",
+            "andn {t10:e}, {b0:e}, {d0:e}\nxor {t10:e}, {c0:e}\nadd {a0:e}, 1873313358\nadd {d0:e}, dword ptr [{m0} + 60]\nsub {a0:e}, {t10:e}\nrol {a0:e}, 6\nadd {a0:e}, {b0:e}",
+            "andn {t11:e}, {b1:e}, {d1:e}\nxor {t11:e}, {c1:e}\nadd {a1:e}, 1873313358\nadd {d1:e}, dword ptr [{m1} + 60]\nsub {a1:e}, {t11:e}\nrol {a1:e}, 6\nadd {a1:e}, {b1:e}",
+            "andn {t10:e}, {a0:e}, {c0:e}\nxor {t10:e}, {b0:e}\nadd {d0:e}, -30611745\nadd {c0:e}, dword ptr [{m0} + 24]\nsub {d0:e}, {t10:e}\nrol {d0:e}, 10\nadd {d0:e}, {a0:e}",
+            "andn {t11:e}, {a1:e}, {c1:e}\nxor {t11:e}, {b1:e}\nadd {d1:e}, -30611745\nadd {c1:e}, dword ptr [{m1} + 24]\nsub {d1:e}, {t11:e}\nrol {d1:e}, 10\nadd {d1:e}, {a1:e}",
+            "andn {t10:e}, {d0:e}, {b0:e}\nxor {t10:e}, {a0:e}\nadd {c0:e}, -1560198381\nadd {b0:e}, dword ptr [{m0} + 52]\nsub {c0:e}, {t10:e}\nrol {c0:e}, 15\nadd {c0:e}, {d0:e}",
+            "andn {t11:e}, {d1:e}, {b1:e}\nxor {t11:e}, {a1:e}\nadd {c1:e}, -1560198381\nadd {b1:e}, dword ptr [{m1} + 52]\nsub {c1:e}, {t11:e}\nrol {c1:e}, 15\nadd {c1:e}, {d1:e}",
+            "andn {t10:e}, {c0:e}, {a0:e}\nxor {t10:e}, {d0:e}\nadd {b0:e}, 1309151648\nadd {a0:e}, dword ptr [{m0} + 16]\nsub {b0:e}, {t10:e}\nrol {b0:e}, 21\nadd {b0:e}, {c0:e}",
+            "andn {t11:e}, {c1:e}, {a1:e}\nxor {t11:e}, {d1:e}\nadd {b1:e}, 1309151648\nadd {a1:e}, dword ptr [{m1} + 16]\nsub {b1:e}, {t11:e}\nrol {b1:e}, 21\nadd {b1:e}, {c1:e}",
+            "andn {t10:e}, {b0:e}, {d0:e}\nxor {t10:e}, {c0:e}\nadd {a0:e}, -145523071\nadd {d0:e}, dword ptr [{m0} + 44]\nsub {a0:e}, {t10:e}\nrol {a0:e}, 6\nadd {a0:e}, {b0:e}",
+            "andn {t11:e}, {b1:e}, {d1:e}\nxor {t11:e}, {c1:e}\nadd {a1:e}, -145523071\nadd {d1:e}, dword ptr [{m1} + 44]\nsub {a1:e}, {t11:e}\nrol {a1:e}, 6\nadd {a1:e}, {b1:e}",
+            "andn {t10:e}, {a0:e}, {c0:e}\nxor {t10:e}, {b0:e}\nadd {d0:e}, -1120210380\nadd {c0:e}, dword ptr [{m0} + 8]\nsub {d0:e}, {t10:e}\nrol {d0:e}, 10\nadd {d0:e}, {a0:e}",
+            "andn {t11:e}, {a1:e}, {c1:e}\nxor {t11:e}, {b1:e}\nadd {d1:e}, -1120210380\nadd {c1:e}, dword ptr [{m1} + 8]\nsub {d1:e}, {t11:e}\nrol {d1:e}, 10\nadd {d1:e}, {a1:e}",
+            "andn {t10:e}, {d0:e}, {b0:e}\nxor {t10:e}, {a0:e}\nadd {c0:e}, 718787258\nadd {b0:e}, dword ptr [{m0} + 36]\nsub {c0:e}, {t10:e}\nrol {c0:e}, 15\nadd {c0:e}, {d0:e}",
+            "andn {t11:e}, {d1:e}, {b1:e}\nxor {t11:e}, {a1:e}\nadd {c1:e}, 718787258\nadd {b1:e}, dword ptr [{m1} + 36]\nsub {c1:e}, {t11:e}\nrol {c1:e}, 15\nadd {c1:e}, {d1:e}",
+            "andn {t10:e}, {c0:e}, {a0:e}\nxor {t10:e}, {d0:e}\nadd {b0:e}, -343485552\nsub {b0:e}, {t10:e}\nrol {b0:e}, 21\nadd {b0:e}, {c0:e}",
+            "andn {t11:e}, {c1:e}, {a1:e}\nxor {t11:e}, {d1:e}\nadd {b1:e}, -343485552\nsub {b1:e}, {t11:e}\nrol {b1:e}, 21\nadd {b1:e}, {c1:e}",
             a0 = inout(reg) a0,
             b0 = inout(reg) b0,
             c0 = inout(reg) c0,
@@ -215,8 +216,13 @@ fn build_padded_block(input: &[u8], padded_blocks: usize, block_index: usize) ->
 
 /// Hash exactly two independent messages by pairing every compression block
 /// that exists in both streams, then finishing any longer tail scalar.
+///
+/// # Safety
+///
+/// The caller must ensure BMI1 is available on the current CPU.
 #[inline]
-pub(crate) fn hash_pair(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
+#[target_feature(enable = "bmi1")]
+pub(crate) unsafe fn hash_pair_bmi1(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
     let full_blocks = [inputs[0].len() / BLOCK_SIZE, inputs[1].len() / BLOCK_SIZE];
     let padded_blocks = [
         padded_blocks_for_len(inputs[0].len()),
@@ -234,7 +240,7 @@ pub(crate) fn hash_pair(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
         let block1: &[u8; BLOCK_SIZE] = inputs[1][offset..offset + BLOCK_SIZE]
             .try_into()
             .expect("full MD5 block");
-        compress_block_pair(&mut states, [block0, block1]);
+        unsafe { compress_block_pair_bmi1(&mut states, [block0, block1]) };
     }
 
     // At most the divergent edge blocks need materialization. For equally
@@ -242,7 +248,7 @@ pub(crate) fn hash_pair(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
     for block_index in paired_full..paired_total {
         let block0 = build_padded_block(inputs[0], padded_blocks[0], block_index);
         let block1 = build_padded_block(inputs[1], padded_blocks[1], block_index);
-        compress_block_pair(&mut states, [&block0, &block1]);
+        unsafe { compress_block_pair_bmi1(&mut states, [&block0, &block1]) };
     }
 
     for lane in 0..2 {
@@ -268,11 +274,14 @@ pub(crate) fn hash_pair(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
 
 #[cfg(test)]
 mod tests {
-    use super::compress_block_pair;
+    use super::compress_block_pair_bmi1;
     use std::vec;
 
     #[test]
     fn dual_hash_matches_single_stream_backend_across_boundaries() {
+        if !std::is_x86_feature_detected!("bmi1") {
+            return;
+        }
         const PAIRS: &[(usize, usize)] = &[
             (0, 0),
             (1, 1),
@@ -293,7 +302,7 @@ mod tests {
         for &(len0, len1) in PAIRS {
             let input0 = vec![0x39; len0];
             let input1 = vec![0xa7; len1];
-            let actual = super::hash_pair([&input0, &input1]);
+            let actual = unsafe { super::hash_pair_bmi1([&input0, &input1]) };
             assert_eq!(
                 actual[0],
                 crate::scalar::hash(&input0),
@@ -309,6 +318,9 @@ mod tests {
 
     #[test]
     fn dual_compressor_matches_single_stream_backend() {
+        if !std::is_x86_feature_detected!("bmi1") {
+            return;
+        }
         let mut seed = 0x243f_6a88_85a3_08d3u64;
         for case in 0..256u32 {
             let mut blocks = [[0u8; 64]; 2];
@@ -337,7 +349,7 @@ mod tests {
             let mut expected = states;
             crate::scalar_x86_64::compress_block(&mut expected[0], &blocks[0]);
             crate::scalar_x86_64::compress_block(&mut expected[1], &blocks[1]);
-            compress_block_pair(&mut states, [&blocks[0], &blocks[1]]);
+            unsafe { compress_block_pair_bmi1(&mut states, [&blocks[0], &blocks[1]]) };
             assert_eq!(states, expected, "case={case}");
         }
     }

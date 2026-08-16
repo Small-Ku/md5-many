@@ -2,23 +2,23 @@ use fearless_simd::{Level, Simd, SimdBase, dispatch};
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::{
-    __cpuid, __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256,
-    _mm256_loadu_si256, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32,
-    _mm256_setzero_si256, _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256,
-    _mm256_unpackhi_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64,
-    _mm256_xor_si256, _mm512_add_epi32, _mm512_loadu_si512, _mm512_permutex2var_epi32,
-    _mm512_rol_epi32, _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512,
-    _mm512_storeu_si512, _mm512_ternarylogic_epi32,
+    __cpuid, __cpuid_count, __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256,
+    _mm256_andnot_si256, _mm256_loadu_si256, _mm256_or_si256, _mm256_permute2x128_si256,
+    _mm256_set1_epi32, _mm256_setzero_si256, _mm256_slli_epi32, _mm256_srli_epi32,
+    _mm256_storeu_si256, _mm256_unpackhi_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi32,
+    _mm256_unpacklo_epi64, _mm256_xor_si256, _mm512_add_epi32, _mm512_loadu_si512,
+    _mm512_permutex2var_epi32, _mm512_rol_epi32, _mm512_set1_epi32, _mm512_setr_epi32,
+    _mm512_setzero_si512, _mm512_storeu_si512, _mm512_ternarylogic_epi32,
 };
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{
-    __cpuid, __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256,
-    _mm256_loadu_si256, _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32,
-    _mm256_setzero_si256, _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256,
-    _mm256_unpackhi_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64,
-    _mm256_xor_si256, _mm512_add_epi32, _mm512_loadu_si512, _mm512_permutex2var_epi32,
-    _mm512_rol_epi32, _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512,
-    _mm512_storeu_si512, _mm512_ternarylogic_epi32,
+    __cpuid, __cpuid_count, __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256,
+    _mm256_andnot_si256, _mm256_loadu_si256, _mm256_or_si256, _mm256_permute2x128_si256,
+    _mm256_set1_epi32, _mm256_setzero_si256, _mm256_slli_epi32, _mm256_srli_epi32,
+    _mm256_storeu_si256, _mm256_unpackhi_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi32,
+    _mm256_unpacklo_epi64, _mm256_xor_si256, _mm512_add_epi32, _mm512_loadu_si512,
+    _mm512_permutex2var_epi32, _mm512_rol_epi32, _mm512_set1_epi32, _mm512_setr_epi32,
+    _mm512_setzero_si512, _mm512_storeu_si512, _mm512_ternarylogic_epi32,
 };
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use fearless_simd::{Avx2, Avx512};
@@ -105,10 +105,31 @@ fn intel_family_06_model_cf() -> bool {
     x86_tuning_class() == X86TuningClass::IntelFamily06ModelCf
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
+fn x86_has_bmi1() -> bool {
+    use core::sync::atomic::{AtomicU8, Ordering};
+
+    // 0 = unknown, 1 = unavailable, 2 = available. Hypervisors may mask
+    // BMI1 independently of family/model, so check the feature bit rather
+    // than assuming every reported Family 19h guest exposes ANDN.
+    static CACHED: AtomicU8 = AtomicU8::new(0);
+    match CACHED.load(Ordering::Relaxed) {
+        1 => return false,
+        2 => return true,
+        _ => {}
+    }
+
+    let max_leaf = __cpuid(0).eax;
+    let available = max_leaf >= 7 && (__cpuid_count(7, 0).ebx & (1 << 3)) != 0;
+    CACHED.store(if available { 2 } else { 1 }, Ordering::Relaxed);
+    available
+}
+
 #[cfg(target_arch = "x86_64")]
 #[inline]
 fn prefer_dual_scalar_pair(inputs: &[&[u8]]) -> bool {
-    if !amd_family_19h() || inputs.len() != 2 {
+    if !amd_family_19h() || !x86_has_bmi1() || inputs.len() != 2 {
         return false;
     }
 
@@ -5699,7 +5720,10 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
 
         #[cfg(target_arch = "x86_64")]
         if prefer_dual_scalar_pair(input_chunk) {
-            let digests = crate::scalar_x86_64_dual::hash_pair([input_chunk[0], input_chunk[1]]);
+            // SAFETY: prefer_dual_scalar_pair checked CPUID BMI1 immediately above.
+            let digests = unsafe {
+                crate::scalar_x86_64_dual::hash_pair_bmi1([input_chunk[0], input_chunk[1]])
+            };
             output_chunk.copy_from_slice(&digests);
             start = end;
             continue;
@@ -5896,7 +5920,10 @@ fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) 
 
         #[cfg(target_arch = "x86_64")]
         if prefer_dual_scalar_pair(input_chunk) {
-            let digests = crate::scalar_x86_64_dual::hash_pair([input_chunk[0], input_chunk[1]]);
+            // SAFETY: prefer_dual_scalar_pair checked CPUID BMI1 immediately above.
+            let digests = unsafe {
+                crate::scalar_x86_64_dual::hash_pair_bmi1([input_chunk[0], input_chunk[1]])
+            };
             output_chunk.copy_from_slice(&digests);
             start = end;
             continue;

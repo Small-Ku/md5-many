@@ -4,7 +4,7 @@ All notable changes to `md5-many` will be documented in this file.
 
 ## Unreleased
 
-- Add an AMD family 19h x86-64 dual-scalar two-message backend. Two independent NoLEA/G-shortcut state chains are interleaved in GPRs, avoiding both sparse AVX2 lanes and sequential-scalar dependency stalls; a measured skew guard avoids paying dual setup when the two streams have too little common work.
+- Add an AMD family 19h x86-64 dual-scalar two-message backend. Two independent NoLEA/G-shortcut state chains are interleaved in GPRs, avoiding both sparse AVX2 lanes and sequential-scalar dependency stalls; BMI1 `ANDN` shortens the throughput-bound G/I rounds, while CPUID gating and a measured skew guard keep unsupported or extremely unbalanced pairs on the existing path.
 
 ## 0.1.0-alpha.1 - 2026-08-16
 
