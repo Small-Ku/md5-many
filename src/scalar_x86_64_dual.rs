@@ -272,7 +272,7 @@ pub(crate) unsafe fn hash_pair_bmi1(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
     ]
 }
 
-#[cfg(test)]
+#[cfg(all(test, feature = "std"))]
 mod tests {
     use super::compress_block_pair_bmi1;
     use std::vec;
