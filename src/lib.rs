@@ -21,6 +21,8 @@ mod consts;
 mod scalar;
 #[cfg(target_arch = "x86_64")]
 mod scalar_x86_64;
+#[cfg(target_arch = "x86_64")]
+mod scalar_x86_64_avx512;
 mod simd;
 
 #[cfg(feature = "digest")]
@@ -42,10 +44,10 @@ pub type Md5Digest = [u8; 16];
 
 /// Compute the MD5 digest of a single byte slice.
 ///
-/// On x86-64 this uses an optimized scalar compression backend; other targets
-/// use the portable Rust compressor. SIMD acceleration is reserved for
-/// independent-message batches; use [`Md5Many`] or [`md5_many`] when multiple
-/// messages are available at once.
+/// On x86-64 this uses the optimized scalar compressor and may select an
+/// XMM-width AVX-512VL single-stream backend on supported Intel CPUs. Other
+/// targets use the portable Rust compressor. For independent-message SIMD
+/// batching, use [`Md5Many`] or [`md5_many`].
 #[must_use]
 pub fn md5(input: &[u8]) -> Md5Digest {
     scalar::hash(input)

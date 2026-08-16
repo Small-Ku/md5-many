@@ -138,6 +138,12 @@ pub(crate) fn compress_blocks(state: &mut [u32; 4], blocks: &[[u8; 64]]) {
 }
 
 pub(crate) fn hash(input: &[u8]) -> [u8; 16] {
+    #[cfg(target_arch = "x86_64")]
+    if crate::scalar_x86_64_avx512::is_preferred() {
+        // SAFETY: runtime feature detection above verifies AVX-512F + AVX-512VL.
+        return unsafe { hash_avx512(input) };
+    }
+
     let mut state = STATE_INIT;
     let mut chunks = input.chunks_exact(64);
 
@@ -162,6 +168,39 @@ pub(crate) fn hash(input: &[u8]) -> [u8; 16] {
 
     for block in &final_blocks[..used] {
         compress_block(&mut state, block);
+    }
+
+    state_to_bytes(state)
+}
+
+#[cfg(target_arch = "x86_64")]
+unsafe fn hash_avx512(input: &[u8]) -> [u8; 16] {
+    let mut state = STATE_INIT;
+    let mut chunks = input.chunks_exact(64);
+
+    for chunk in &mut chunks {
+        let block: &[u8; 64] = chunk.try_into().expect("64-byte chunk");
+        // SAFETY: the caller verified AVX-512F + AVX-512VL.
+        unsafe { crate::scalar_x86_64_avx512::compress_block(&mut state, block) };
+    }
+
+    let tail = chunks.remainder();
+    let mut final_blocks = [[0u8; 64]; 2];
+    final_blocks[0][..tail.len()].copy_from_slice(tail);
+    final_blocks[0][tail.len()] = 0x80;
+
+    let bit_len = (input.len() as u64).wrapping_mul(8).to_le_bytes();
+    let used = if tail.len() <= 55 {
+        final_blocks[0][56..64].copy_from_slice(&bit_len);
+        1
+    } else {
+        final_blocks[1][56..64].copy_from_slice(&bit_len);
+        2
+    };
+
+    for block in &final_blocks[..used] {
+        // SAFETY: the caller verified AVX-512F + AVX-512VL.
+        unsafe { crate::scalar_x86_64_avx512::compress_block(&mut state, block) };
     }
 
     state_to_bytes(state)
@@ -201,7 +240,14 @@ mod tests {
             let mut optimized = initial;
             compress_block_portable(&mut portable, &block);
             crate::scalar_x86_64::compress_block(&mut optimized, &block);
-            assert_eq!(optimized, portable, "case={case}");
+            assert_eq!(optimized, portable, "scalar case={case}");
+
+            if crate::scalar_x86_64_avx512::is_supported() {
+                let mut avx512 = initial;
+                // SAFETY: the feature probe above verifies AVX-512F + AVX-512VL.
+                unsafe { crate::scalar_x86_64_avx512::compress_block(&mut avx512, &block) };
+                assert_eq!(avx512, portable, "avx512 case={case}");
+            }
         }
     }
 }

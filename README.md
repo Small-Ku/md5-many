@@ -8,11 +8,12 @@ High-throughput MD5 for Rust, with an optimized single-stream path and runtime-d
 
 A single MD5 stream has a dependency between consecutive 64-byte blocks, so wide SIMD is most useful when several independent messages are available at once. `md5-many` therefore exposes two complementary paths:
 
-- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compression backend; other targets retain the portable Rust compressor.
+- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compressor; the one-shot `md5()` path can additionally select an XMM-width AVX-512VL compressor on supported Intel CPUs. Other targets retain the portable Rust compressor.
 - `Md5Many`: batches independent messages into SIMD lanes and chooses a scheduler appropriate to the detected CPU and workload.
 
 On x86 the specialized backend currently includes:
 
+- One-shot single-stream AVX-512VL: XMM registers with `VPTERNLOGD`/`VPROLD`, selected only on supported Intel CPUs; AMD AVX-512 stays on the faster NoLEA scalar path.
 - AVX2: 8-message native kernels plus interleaved 16-message dual-chain and 24-message triple-chain kernels.
 - AVX-512: 16-message native kernels plus interleaved 32-message dual-chain and 48-message triple-chain kernels.
 - AVX-512 rounds use `VPTERNLOGD` for the MD5 Boolean functions and `VPROLD` for rotates.
@@ -129,9 +130,10 @@ cargo test --locked --no-default-features --features libm,digest
 
 The optimized x86-64 scalar compressor is a direct Rust port of the
 `md5_block_noleag` scheduling from `animetosho/md5-optimisation` commit
-`7cd4ad511f8cddbeed584c4087fb9506d94e8b87`. Its author releases that
-source into the Public Domain, or under CC0-1.0 where a public-domain
-dedication is not recognized.
+`7cd4ad511f8cddbeed584c4087fb9506d94e8b87`. The XMM-width single-stream
+AVX-512VL compressor ports the same repository's `md5_block_avx512` packed
+message/constant schedule. Its author releases that source into the Public
+Domain, or under CC0-1.0 where a public-domain dedication is not recognized.
 
 ## License
 
