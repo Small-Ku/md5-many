@@ -1,7 +1,6 @@
-name: Performance
+name: Full performance
 
 on:
-  pull_request:
   workflow_dispatch:
     inputs:
       compare_ref:
@@ -9,14 +8,6 @@ on:
         required: false
         default: ''
         type: string
-      scope:
-        description: Benchmark scope
-        required: true
-        default: full
-        type: choice
-        options:
-          - sentinels
-          - full
       enforce:
         description: Fail the run on a confirmed regression
         required: true
@@ -27,7 +18,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: perf-${{ github.workflow }}-${{ github.ref }}
+  group: perf-manual-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -39,26 +30,24 @@ env:
   PERF_MEASUREMENT_SECONDS: 2
 
 jobs:
-  paired:
-    name: Performance guard (${{ matrix.arch }})
+  full:
+    name: Full performance (${{ matrix.arch }})
     strategy:
       fail-fast: false
       matrix:
         include:
           - arch: x86_64
             runner: ubuntu-24.04
-            sentinels: single-stream-1MiB|many-65536-bytes|x86-two-message-near-64KiB|x86-small-skew|x86-small-batch
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            sentinels: single-stream-1MiB|many-65536-bytes|lane-fill-64KiB|mixed-short
     runs-on: ${{ matrix.runner }}
-    timeout-minutes: 45
+    timeout-minutes: 120
     steps:
       - name: Checkout candidate
         uses: actions/checkout@v5
         with:
-          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
           path: head
           fetch-depth: 0
           fetch-tags: true
@@ -66,29 +55,13 @@ jobs:
 
       - name: Resolve performance baseline
         env:
-          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
-          PERF_COMPARE_REF_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.compare_ref || '' }}
+          PERF_COMPARE_REF_OVERRIDE: ${{ inputs.compare_ref }}
         run: |
-          if [[ -n "$PR_BASE_SHA" ]]; then
-            baseline=$PR_BASE_SHA
-          else
-            baseline=$(head/.github/scripts/resolve-perf-baseline.sh head "$PERF_COMPARE_REF_OVERRIDE")
-          fi
+          baseline=$(head/.github/scripts/resolve-perf-baseline.sh head "$PERF_COMPARE_REF_OVERRIDE")
           echo "PERF_BASE_REF=$baseline" >> "$GITHUB_ENV"
           echo "Selected performance baseline: $baseline"
 
-      - name: Checkout PR baseline
-        if: github.event_name == 'pull_request'
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ github.event.pull_request.base.sha }}
-          path: base
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Materialize release baseline
-        if: github.event_name == 'workflow_dispatch'
         run: git -C head worktree add --detach "$GITHUB_WORKSPACE/base" "$PERF_BASE_REF"
 
       - name: Resolve comparison SHAs
@@ -110,25 +83,24 @@ jobs:
           cargo fetch --locked --manifest-path base/Cargo.toml
           cargo fetch --locked --manifest-path head/Cargo.toml
 
-      - name: Paired Criterion run
+      - name: Full paired Criterion run
         env:
           PERF_BASE_TARGET: ${{ runner.temp }}/perf-base
           PERF_HEAD_TARGET: ${{ runner.temp }}/perf-head
-          PERF_BASELINE_NAME: ci-pair
+          PERF_BASELINE_NAME: manual-pair
           PERF_REPORT_ROOT: ${{ runner.temp }}/perf-report
-          PERF_FILTERS: ${{ github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && 'ALL' || matrix.sentinels }}
         run: |
           head/.github/scripts/run-perf-pair.sh \
             base/Cargo.toml \
             head/Cargo.toml \
-            "$PERF_FILTERS"
+            ALL
 
       - name: Evaluate regressions
         env:
           PERF_REPORT_ROOT: ${{ runner.temp }}/perf-report
         run: |
           extra=()
-          if [[ "${{ github.event_name }}" == workflow_dispatch && "${{ inputs.enforce }}" != true ]]; then
+          if [[ "${{ inputs.enforce }}" != true ]]; then
             extra+=(--no-fail)
           fi
           python3 head/.github/scripts/perf-guard.py \
@@ -142,7 +114,7 @@ jobs:
         if: always()
         uses: actions/upload-artifact@v7
         with:
-          name: performance-${{ matrix.arch }}-${{ github.run_id }}
+          name: full-performance-${{ matrix.arch }}-${{ github.run_id }}
           path: |
             head/perf-runner.txt
             head/perf-guard.json

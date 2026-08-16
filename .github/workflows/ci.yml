@@ -74,3 +74,99 @@ jobs:
         run: cargo check --locked --lib --all-features
       - name: Check no_std library at MSRV
         run: cargo check --locked --lib --no-default-features --features libm,digest
+
+  performance:
+    name: Performance guard (${{ matrix.arch }})
+    if: github.event_name == 'pull_request'
+    needs: [test, quality, msrv]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            sentinels: single-stream-1MiB|many-65536-bytes|x86-two-message-near-64KiB|x86-small-skew|x86-small-batch
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            sentinels: single-stream-1MiB|many-65536-bytes|lane-fill-64KiB|mixed-short
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    env:
+      CARGO_INCREMENTAL: 0
+      PERF_SAMPLE_SIZE: 20
+      PERF_WARMUP_SECONDS: 1
+      PERF_MEASUREMENT_SECONDS: 2
+    steps:
+      - name: Checkout candidate
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.event.pull_request.head.repo.full_name }}
+          ref: ${{ github.event.pull_request.head.sha }}
+          path: head
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout PR baseline
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Resolve comparison SHAs
+        run: |
+          echo "PERF_BASE_SHA=$(git -C base rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "PERF_HEAD_SHA=$(git -C head rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "PR performance runs only after test, quality, and MSRV jobs succeed." >> "$GITHUB_STEP_SUMMARY"
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      - name: Fingerprint runner
+        run: head/.github/scripts/fingerprint-runner.sh head/perf-runner.txt
+
+      - name: Fetch dependencies before measuring
+        run: |
+          cargo fetch --locked --manifest-path base/Cargo.toml
+          cargo fetch --locked --manifest-path head/Cargo.toml
+
+      - name: Paired Criterion sentinel run
+        env:
+          PERF_BASE_TARGET: ${{ runner.temp }}/perf-base
+          PERF_HEAD_TARGET: ${{ runner.temp }}/perf-head
+          PERF_BASELINE_NAME: ci-pair
+          PERF_REPORT_ROOT: ${{ runner.temp }}/perf-report
+          PERF_FILTERS: ${{ matrix.sentinels }}
+        run: |
+          head/.github/scripts/run-perf-pair.sh \
+            base/Cargo.toml \
+            head/Cargo.toml \
+            "$PERF_FILTERS"
+
+      - name: Evaluate regressions
+        env:
+          PERF_REPORT_ROOT: ${{ runner.temp }}/perf-report
+        run: |
+          python3 head/.github/scripts/perf-guard.py \
+            "$PERF_REPORT_ROOT" \
+            --base-sha "$PERF_BASE_SHA" \
+            --head-sha "$PERF_HEAD_SHA" \
+            --json-out head/perf-guard.json
+
+      - name: Upload benchmark data
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: ci-performance-${{ matrix.arch }}-${{ github.run_id }}
+          path: |
+            head/perf-runner.txt
+            head/perf-guard.json
+            ${{ runner.temp }}/perf-report
+            ${{ runner.temp }}/perf-base/criterion
+            ${{ runner.temp }}/perf-head/criterion
+          if-no-files-found: warn
+          retention-days: 14
