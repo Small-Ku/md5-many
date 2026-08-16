@@ -3,7 +3,7 @@
 #![warn(missing_docs)]
 //! High-throughput MD5 with portable multi-buffer SIMD.
 //!
-//! `fearless-md5` keeps the standard single-stream MD5 API separate from its
+//! `md5-many` keeps the standard single-stream MD5 API separate from its
 //! SIMD batch engine. A single MD5 stream has a dependency from one 64-byte
 //! block to the next, while independent messages can occupy independent SIMD
 //! lanes. On x86-64 the batch scheduler combines 8-way AVX2 or 16-way AVX-512

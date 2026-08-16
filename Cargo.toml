@@ -1,9 +1,13 @@
 [package]
-name = "fearless-md5"
-version = "0.1.0"
+name = "md5-many"
+version = "0.1.0-alpha.1"
 edition = "2024"
 rust-version = "1.89"
 description = "High-throughput MD5 with portable SIMD and multi-buffer backends"
+repository = "https://github.com/Small-Ku/md5-many"
+documentation = "https://docs.rs/md5-many"
+readme = "README.md"
+exclude = ["AGENTS.md"]
 license = "MIT OR Apache-2.0"
 keywords = ["md5", "simd", "hash", "checksum"]
 categories = ["algorithms", "cryptography"]

@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
-use fearless_md5::{Md5Many, md5};
 use md5::{Digest as _, Md5 as RustCryptoMd5};
+use md5_many::{Md5Many, md5};
 use std::hint::black_box;
 
 fn bench_single(c: &mut Criterion) {
@@ -8,12 +8,7 @@ fn bench_single(c: &mut Criterion) {
     let mut group = c.benchmark_group("single-stream-1MiB");
     group.throughput(Throughput::Bytes(data.len() as u64));
 
-    group.bench_function("md5-many-md5", |b| {
-        b.iter(|| black_box(md5(black_box(&data))))
-    });
-    group.bench_function("rustcrypto-baseline", |b| {
-        b.iter(|| black_box(RustCryptoMd5::digest(black_box(&data))))
-    });
+    group.bench_function("md5-many", |b| b.iter(|| black_box(md5(black_box(&data)))));
     group.bench_function("rustcrypto-md5", |b| {
         b.iter(|| black_box(RustCryptoMd5::digest(black_box(&data))))
     });
@@ -43,13 +38,6 @@ fn bench_many(c: &mut Criterion) {
                 })
             },
         );
-        group.bench_with_input(BenchmarkId::new("rustcrypto-baseline-serial", size), &size, |b, _| {
-            b.iter(|| {
-                for input in &inputs {
-                    black_box(RustCryptoMd5::digest(black_box(input)));
-                }
-            })
-        });
         group.bench_with_input(
             BenchmarkId::new("rustcrypto-serial", size),
             &size,
@@ -78,23 +66,12 @@ fn bench_lane_fill(c: &mut Criterion) {
         let inputs: Vec<&[u8]> = storage[..active].iter().map(Vec::as_slice).collect();
         let mut outputs = vec![[0u8; 16]; active];
         group.throughput(Throughput::Bytes((size * active) as u64));
-        group.bench_with_input(BenchmarkId::new("fearless", active), &active, |b, _| {
+        group.bench_with_input(BenchmarkId::new("md5-many", active), &active, |b, _| {
             b.iter(|| {
                 engine.hash_many(black_box(&inputs), black_box(&mut outputs));
                 black_box(&outputs);
             })
         });
-        group.bench_with_input(
-            BenchmarkId::new("rustcrypto-baseline-serial", active),
-            &active,
-            |b, _| {
-                b.iter(|| {
-                    for input in &inputs {
-                        black_box(RustCryptoMd5::digest(black_box(input)));
-                    }
-                })
-            },
-        );
     }
     group.finish();
 }
@@ -120,13 +97,6 @@ fn bench_mixed_short(c: &mut Criterion) {
             black_box(&outputs);
         })
     });
-    group.bench_function("rustcrypto-baseline-serial", |b| {
-        b.iter(|| {
-            for input in &inputs {
-                black_box(RustCryptoMd5::digest(black_box(input)));
-            }
-        })
-    });
     group.finish();
 }
 
@@ -148,17 +118,10 @@ fn bench_skewed_partial(c: &mut Criterion) {
 
     let mut group = c.benchmark_group(format!("mixed-skewed-{count}-way"));
     group.throughput(Throughput::Bytes(total as u64));
-    group.bench_function("fearless", |b| {
+    group.bench_function("md5-many", |b| {
         b.iter(|| {
             engine.hash_many(black_box(&inputs), black_box(&mut outputs));
             black_box(&outputs);
-        })
-    });
-    group.bench_function("rustcrypto-baseline-serial", |b| {
-        b.iter(|| {
-            for input in &inputs {
-                black_box(RustCryptoMd5::digest(black_box(input)));
-            }
         })
     });
     group.finish();
@@ -178,17 +141,10 @@ fn bench_mixed_lengths(c: &mut Criterion) {
         let mut outputs = vec![[0u8; 16]; count];
         let mut group = c.benchmark_group(format!("mixed-{count}x~64KiB"));
         group.throughput(Throughput::Bytes(total as u64));
-        group.bench_function("fearless", |b| {
+        group.bench_function("md5-many", |b| {
             b.iter(|| {
                 engine.hash_many(black_box(&inputs), black_box(&mut outputs));
                 black_box(&outputs);
-            })
-        });
-        group.bench_function("rustcrypto-baseline-serial", |b| {
-            b.iter(|| {
-                for input in &inputs {
-                    black_box(RustCryptoMd5::digest(black_box(input)));
-                }
             })
         });
         group.finish();
@@ -219,7 +175,7 @@ fn bench_partial_batch_scaling(c: &mut Criterion) {
     let mut group = c.benchmark_group("partial-batch-scaling-64KiB");
     for &count in counts {
         group.throughput(Throughput::Bytes((count * size) as u64));
-        group.bench_with_input(BenchmarkId::new("fearless", count), &count, |b, &count| {
+        group.bench_with_input(BenchmarkId::new("md5-many", count), &count, |b, &count| {
             b.iter(|| {
                 engine.hash_many(
                     black_box(&all_inputs[..count]),
@@ -246,7 +202,7 @@ fn bench_batch_scaling(c: &mut Criterion) {
         let mut outputs = vec![[0u8; 16]; count];
         let mut group = c.benchmark_group(format!("batch-scaling-{count}"));
         group.throughput(Throughput::Bytes((count * size) as u64));
-        group.bench_function("fearless", |b| {
+        group.bench_function("md5-many", |b| {
             b.iter(|| {
                 engine.hash_many(black_box(&inputs), black_box(&mut outputs));
                 black_box(&outputs);

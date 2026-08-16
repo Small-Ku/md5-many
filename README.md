@@ -29,7 +29,7 @@ Other `fearless_simd` targets retain the portable multi-buffer implementation, i
 
 ```toml
 [dependencies]
-md5-many = "0.1"
+md5-many = "0.1.0-alpha.1"
 ```
 
 ### Single message
@@ -86,7 +86,7 @@ let result = hasher.finalize();
 
 ```toml
 [dependencies]
-md5-many = { version = "0.1", default-features = false, features = ["libm", "digest"] }
+md5-many = { version = "0.1.0-alpha.1", default-features = false, features = ["libm", "digest"] }
 ```
 
 Or omit `digest` if the block-trait adapter is not needed.
@@ -125,13 +125,15 @@ cargo test --locked --no-default-features --features libm
 cargo test --locked --no-default-features --features libm,digest
 ```
 
+## Implementation provenance
+
+The optimized x86-64 scalar compressor is a direct Rust port of the
+`md5_block_noleag` scheduling from `animetosho/md5-optimisation` commit
+`7cd4ad511f8cddbeed584c4087fb9506d94e8b87`. Its author releases that
+source into the Public Domain, or under CC0-1.0 where a public-domain
+dedication is not recognized.
+
 ## License
 
-
-The package license expression is therefore:
-
-```text
-MIT OR Apache-2.0
-```
-
-See `LICENSE-MIT` and `LICENSE-APACHE`.
+`md5-many` is dual-licensed under MIT OR Apache-2.0. See `LICENSE-MIT` and
+`LICENSE-APACHE`.

@@ -1,4 +1,4 @@
 fn main() {
-    let engine = fearless_md5::Md5Many::new();
+    let engine = md5_many::Md5Many::new();
     println!("native u32 lanes: {}", engine.lanes());
 }
