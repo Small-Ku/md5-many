@@ -13,6 +13,8 @@ use core::arch::x86_64::{
     _mm_srli_epi64, _mm_srli_si128, _mm_ternarylogic_epi32, _mm_unpackhi_epi64,
 };
 
+use crate::consts::STATE_INIT;
+
 const BLOCK_SIZE: usize = 64;
 const STATE_WORDS: usize = 4;
 
@@ -232,81 +234,162 @@ macro_rules! ri4 {
     }};
 }
 
-/// Compress one block using XMM registers plus AVX-512F/VL instructions.
+/// Compress one block while keeping the MD5 state in XMM registers.
+///
+/// Only the low `u32` lane of each state vector is semantically significant;
+/// upper lanes are scratch and may carry arbitrary values between blocks.
 ///
 /// # Safety
 ///
 /// The caller must ensure AVX-512F and AVX-512VL are available and enabled by
 /// the operating system.
-#[target_feature(enable = "avx512f,avx512vl")]
+#[inline(always)]
 #[allow(clippy::many_single_char_names)]
 #[allow(clippy::too_many_lines)]
 #[allow(unused_assignments)]
+unsafe fn compress_block_vec(state: &mut [__m128i; STATE_WORDS], block: &[u8; BLOCK_SIZE]) {
+    unsafe {
+        let ia = state[0];
+        let ib = state[1];
+        let ic = state[2];
+        let id = state[3];
+        let mut a: __m128i;
+        let mut b: __m128i;
+        let mut c: __m128i;
+        let mut d: __m128i;
+        let mut tmp1;
+        let mut tmp2 = id;
+
+        let mut in0 = _mm_add_epi32(load_message_group(block, 0), load_constant_group(0));
+        let mut in4 = _mm_add_epi32(load_message_group(block, 4), load_constant_group(4));
+        let mut in8 = _mm_add_epi32(load_message_group(block, 8), load_constant_group(8));
+        let mut in12 = _mm_add_epi32(load_message_group(block, 12), load_constant_group(12));
+
+        rf4_first!(in0, a, b, c, d, ia, ib, ic, id, tmp1, tmp2);
+        rf4!(in4, a, b, c, d, tmp1, tmp2);
+        rf4!(in8, a, b, c, d, tmp1, tmp2);
+        rf4!(in12, a, b, c, d, tmp1, tmp2);
+
+        in0 = _mm_add_epi32(in0, load_constant_group(16));
+        in4 = _mm_add_epi32(in4, load_constant_group(20));
+        in8 = _mm_add_epi32(in8, load_constant_group(24));
+        rg4!(in0, in4, in8, a, b, c, d, tmp1, tmp2);
+        in12 = _mm_add_epi32(in12, load_constant_group(28));
+        rg4!(in4, in8, in12, a, b, c, d, tmp1, tmp2);
+        rg4!(in8, in12, in0, a, b, c, d, tmp1, tmp2);
+        rg4!(in12, in0, in4, a, b, c, d, tmp1, tmp2);
+
+        in4 = _mm_add_epi32(in4, load_constant_group(36));
+        tmp1 = _mm_srli_epi64::<32>(in4);
+        a = _mm_add_epi32(a, tmp1);
+        tmp2 = _mm_ternarylogic_epi32::<0x96>(tmp2, c, b);
+        a = _mm_add_epi32(a, tmp2);
+        a = _mm_rol_epi32::<4>(a);
+        a = _mm_add_epi32(a, b);
+
+        in8 = _mm_add_epi32(in8, load_constant_group(40));
+        round_h!(d, a, in8, 11, tmp1, tmp2);
+        tmp1 = _mm_srli_si128::<12>(in8);
+        in12 = _mm_add_epi32(in12, load_constant_group(44));
+        round_h!(c, d, tmp1, 16, tmp1, tmp2);
+        tmp1 = _mm_unpackhi_epi64(in12, in12);
+        round_h!(b, c, tmp1, 23, tmp1, tmp2);
+
+        in0 = _mm_add_epi32(in0, load_constant_group(32));
+        rh4!(in0, in4, in8, a, b, c, d, tmp1, tmp2);
+        rh4!(in12, in0, in4, a, b, c, d, tmp1, tmp2);
+        rh4!(in8, in12, in0, a, b, c, d, tmp1, tmp2);
+        tmp2 = d;
+
+        in0 = _mm_add_epi32(in0, load_constant_group(48));
+        in4 = _mm_add_epi32(in4, load_constant_group(52));
+        in12 = _mm_add_epi32(in12, load_constant_group(60));
+        ri4!(in0, in4, in12, a, b, c, d, tmp1, tmp2);
+        in8 = _mm_add_epi32(in8, load_constant_group(56));
+        ri4!(in12, in0, in8, a, b, c, d, tmp1, tmp2);
+        ri4!(in8, in12, in4, a, b, c, d, tmp1, tmp2);
+        ri4!(in4, in8, in0, a, b, c, d, tmp1, tmp2);
+
+        state[0] = _mm_add_epi32(a, ia);
+        state[1] = _mm_add_epi32(b, ib);
+        state[2] = _mm_add_epi32(c, ic);
+        state[3] = _mm_add_epi32(d, id);
+    }
+}
+
+#[inline(always)]
+unsafe fn vector_state_from_scalar(state: &[u32; STATE_WORDS]) -> [__m128i; STATE_WORDS] {
+    unsafe {
+        [
+            _mm_cvtsi32_si128(state[0] as i32),
+            _mm_cvtsi32_si128(state[1] as i32),
+            _mm_cvtsi32_si128(state[2] as i32),
+            _mm_cvtsi32_si128(state[3] as i32),
+        ]
+    }
+}
+
+#[inline(always)]
+unsafe fn vector_state_to_scalar(state: [__m128i; STATE_WORDS]) -> [u32; STATE_WORDS] {
+    unsafe {
+        [
+            _mm_cvtsi128_si32(state[0]) as u32,
+            _mm_cvtsi128_si32(state[1]) as u32,
+            _mm_cvtsi128_si32(state[2]) as u32,
+            _mm_cvtsi128_si32(state[3]) as u32,
+        ]
+    }
+}
+
+#[target_feature(enable = "avx512f,avx512vl")]
 pub(crate) unsafe fn compress_block(state: &mut [u32; STATE_WORDS], block: &[u8; BLOCK_SIZE]) {
-    let ia = _mm_cvtsi32_si128(state[0] as i32);
-    let ib = _mm_cvtsi32_si128(state[1] as i32);
-    let ic = _mm_cvtsi32_si128(state[2] as i32);
-    let id = _mm_cvtsi32_si128(state[3] as i32);
+    let mut vector_state = unsafe { vector_state_from_scalar(state) };
+    unsafe { compress_block_vec(&mut vector_state, block) };
+    *state = unsafe { vector_state_to_scalar(vector_state) };
+}
 
-    let mut a: __m128i;
-    let mut b: __m128i;
-    let mut c: __m128i;
-    let mut d: __m128i;
-    let mut tmp1;
-    let mut tmp2 = id;
+#[cfg(feature = "digest")]
+#[target_feature(enable = "avx512f,avx512vl")]
+pub(crate) unsafe fn compress_blocks(state: &mut [u32; STATE_WORDS], blocks: &[[u8; BLOCK_SIZE]]) {
+    let mut vector_state = unsafe { vector_state_from_scalar(state) };
+    for block in blocks {
+        unsafe { compress_block_vec(&mut vector_state, block) };
+    }
+    *state = unsafe { vector_state_to_scalar(vector_state) };
+}
 
-    let mut in0 = _mm_add_epi32(load_message_group(block, 0), load_constant_group(0));
-    let mut in4 = _mm_add_epi32(load_message_group(block, 4), load_constant_group(4));
-    let mut in8 = _mm_add_epi32(load_message_group(block, 8), load_constant_group(8));
-    let mut in12 = _mm_add_epi32(load_message_group(block, 12), load_constant_group(12));
+#[target_feature(enable = "avx512f,avx512vl")]
+pub(crate) unsafe fn hash(input: &[u8]) -> [u8; 16] {
+    let mut vector_state = unsafe { vector_state_from_scalar(&STATE_INIT) };
+    let mut chunks = input.chunks_exact(BLOCK_SIZE);
 
-    rf4_first!(in0, a, b, c, d, ia, ib, ic, id, tmp1, tmp2);
-    rf4!(in4, a, b, c, d, tmp1, tmp2);
-    rf4!(in8, a, b, c, d, tmp1, tmp2);
-    rf4!(in12, a, b, c, d, tmp1, tmp2);
+    for chunk in &mut chunks {
+        let block: &[u8; BLOCK_SIZE] = chunk.try_into().expect("64-byte chunk");
+        unsafe { compress_block_vec(&mut vector_state, block) };
+    }
 
-    in0 = _mm_add_epi32(in0, load_constant_group(16));
-    in4 = _mm_add_epi32(in4, load_constant_group(20));
-    in8 = _mm_add_epi32(in8, load_constant_group(24));
-    rg4!(in0, in4, in8, a, b, c, d, tmp1, tmp2);
-    in12 = _mm_add_epi32(in12, load_constant_group(28));
-    rg4!(in4, in8, in12, a, b, c, d, tmp1, tmp2);
-    rg4!(in8, in12, in0, a, b, c, d, tmp1, tmp2);
-    rg4!(in12, in0, in4, a, b, c, d, tmp1, tmp2);
+    let tail = chunks.remainder();
+    let mut final_blocks = [[0u8; BLOCK_SIZE]; 2];
+    final_blocks[0][..tail.len()].copy_from_slice(tail);
+    final_blocks[0][tail.len()] = 0x80;
 
-    in4 = _mm_add_epi32(in4, load_constant_group(36));
-    tmp1 = _mm_srli_epi64::<32>(in4);
-    a = _mm_add_epi32(a, tmp1);
-    tmp2 = _mm_ternarylogic_epi32::<0x96>(tmp2, c, b);
-    a = _mm_add_epi32(a, tmp2);
-    a = _mm_rol_epi32::<4>(a);
-    a = _mm_add_epi32(a, b);
+    let bit_len = (input.len() as u64).wrapping_mul(8).to_le_bytes();
+    let used = if tail.len() <= 55 {
+        final_blocks[0][56..64].copy_from_slice(&bit_len);
+        1
+    } else {
+        final_blocks[1][56..64].copy_from_slice(&bit_len);
+        2
+    };
 
-    in8 = _mm_add_epi32(in8, load_constant_group(40));
-    round_h!(d, a, in8, 11, tmp1, tmp2);
-    tmp1 = _mm_srli_si128::<12>(in8);
-    in12 = _mm_add_epi32(in12, load_constant_group(44));
-    round_h!(c, d, tmp1, 16, tmp1, tmp2);
-    tmp1 = _mm_unpackhi_epi64(in12, in12);
-    round_h!(b, c, tmp1, 23, tmp1, tmp2);
+    for block in &final_blocks[..used] {
+        unsafe { compress_block_vec(&mut vector_state, block) };
+    }
 
-    in0 = _mm_add_epi32(in0, load_constant_group(32));
-    rh4!(in0, in4, in8, a, b, c, d, tmp1, tmp2);
-    rh4!(in12, in0, in4, a, b, c, d, tmp1, tmp2);
-    rh4!(in8, in12, in0, a, b, c, d, tmp1, tmp2);
-    tmp2 = d;
-
-    in0 = _mm_add_epi32(in0, load_constant_group(48));
-    in4 = _mm_add_epi32(in4, load_constant_group(52));
-    in12 = _mm_add_epi32(in12, load_constant_group(60));
-    ri4!(in0, in4, in12, a, b, c, d, tmp1, tmp2);
-    in8 = _mm_add_epi32(in8, load_constant_group(56));
-    ri4!(in12, in0, in8, a, b, c, d, tmp1, tmp2);
-    ri4!(in8, in12, in4, a, b, c, d, tmp1, tmp2);
-    ri4!(in4, in8, in0, a, b, c, d, tmp1, tmp2);
-
-    state[0] = _mm_cvtsi128_si32(_mm_add_epi32(a, ia)) as u32;
-    state[1] = _mm_cvtsi128_si32(_mm_add_epi32(b, ib)) as u32;
-    state[2] = _mm_cvtsi128_si32(_mm_add_epi32(c, ic)) as u32;
-    state[3] = _mm_cvtsi128_si32(_mm_add_epi32(d, id)) as u32;
+    let state = unsafe { vector_state_to_scalar(vector_state) };
+    let mut out = [0u8; 16];
+    for (chunk, word) in out.chunks_exact_mut(4).zip(state) {
+        chunk.copy_from_slice(&word.to_le_bytes());
+    }
+    out
 }

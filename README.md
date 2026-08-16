@@ -13,7 +13,7 @@ A single MD5 stream has a dependency between consecutive 64-byte blocks, so wide
 
 On x86 the specialized backend currently includes:
 
-- Single-stream AVX-512VL: XMM registers with `VPTERNLOGD`/`VPROLD`, selected only on supported Intel CPUs for one-shot and streaming hashing; AMD AVX-512 stays on the faster NoLEA scalar path.
+- Single-stream AVX-512VL: XMM registers with `VPTERNLOGD`/`VPROLD`, selected only on supported Intel CPUs for one-shot and streaming hashing. Consecutive blocks keep the four MD5 state vectors in XMM registers instead of round-tripping through scalar state after every block; AMD AVX-512 stays on the faster NoLEA scalar path.
 - AVX2: 8-message native kernels plus interleaved 16-message dual-chain and 24-message triple-chain kernels.
 - AVX-512: 16-message native kernels plus interleaved 32-message dual-chain and 48-message triple-chain kernels.
 - AVX-512 rounds use `VPTERNLOGD` for the MD5 Boolean functions and `VPROLD` for rotates.

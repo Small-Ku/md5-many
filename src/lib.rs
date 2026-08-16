@@ -562,4 +562,16 @@ mod tests {
         let got = hasher.finalize();
         assert_eq!(got.as_slice(), reference(b"fearless md5"));
     }
+
+    #[cfg(feature = "digest")]
+    #[test]
+    fn digest_streaming_multiblock_matches_reference() {
+        let data: [u8; 4097] = core::array::from_fn(|i| (i * 29 + 7) as u8);
+        let mut hasher = Md5::new();
+        hasher.update(&data[..13]);
+        hasher.update(&data[13..4013]);
+        hasher.update(&data[4013..]);
+        let got = hasher.finalize();
+        assert_eq!(got.as_slice(), reference(&data));
+    }
 }

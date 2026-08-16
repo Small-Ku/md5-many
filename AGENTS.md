@@ -6,7 +6,7 @@ Developer guidance for `md5-many`.
 
 `md5-many` has two performance domains:
 
-1. **Single stream**: MD5 blocks are sequentially dependent. x86-64 uses the optimized backend in `src/scalar_x86_64.rs`; `src/scalar.rs` remains the portable implementation and correctness oracle.
+1. **Single stream**: MD5 blocks are sequentially dependent. x86-64 uses the optimized backend in `src/scalar_x86_64.rs`; `src/scalar.rs` remains the portable implementation and correctness oracle. On preferred Intel AVX-512F/VL CPUs, the AVX-512VL one-shot loop keeps A/B/C/D in XMM state across consecutive blocks, and the RustCrypto block adapter converts scalar state only once per `compress_blocks` batch. Keep the always-inlined vector-state core inside an AVX-512 target-feature context: calling it from a generic non-target-feature closure causes Rust to outline target-feature intrinsic thunks and destroys performance.
 2. **Independent messages**: `src/simd.rs` maps independent MD5 states to SIMD lanes through `fearless_simd`.
 
 Specialized x86 kernels use 8 lanes for AVX2 and 16 lanes for AVX-512. Two or three native groups can be interleaved round-by-round to hide the dependency latency of one MD5 chain. Four-way interleaving was benchmarked and rejected due to register/issue pressure; do not reintroduce it without new evidence.
@@ -63,7 +63,7 @@ cargo package --locked
 
 `fearless_simd` 0.7 requires either `std` or `libm`; plain `--no-default-features` is not a valid dependency configuration.
 
-For performance work, compare before/after with the same Criterion benchmark name and inspect release machine code when an optimization depends on a particular ISA instruction. A plausible algebraic rewrite is not sufficient reason to keep a change. On AVX-512 x86 hosts, the `x86-small-batch-*` Criterion groups compare runtime `auto` dispatch against a forced AVX2 level and should be used before changing the <=8-message crossover. The `x86-two-message-*` groups cover the dual-scalar pair path and its skew guard. The `x86-small-skew-*` groups pin the three-message quarter-gap crossover, 4–8-message clustered-tail wins, and the one-short/many-long guard shape.
+For performance work, compare before/after with the same Criterion benchmark name and inspect release machine code when an optimization depends on a particular ISA instruction. A plausible algebraic rewrite is not sufficient reason to keep a change. On the measured Intel Xeon Platinum 8573C (family 6/model `0xCF`), retaining XMM state across AVX-512VL blocks improved the public one-shot and RustCrypto streaming paths by about 4.6–4.7% for 4 KiB–1 MiB inputs relative to the previous per-block scalar/XMM bridge; pinned-cycle comparison against forced NoLEA is about 11% faster for long single streams. On AVX-512 x86 hosts, the `x86-small-batch-*` Criterion groups compare runtime `auto` dispatch against a forced AVX2 level and should be used before changing the <=8-message crossover. The `x86-two-message-*` groups cover the dual-scalar pair path and its skew guard. The `x86-small-skew-*` groups pin the three-message quarter-gap crossover, 4–8-message clustered-tail wins, and the one-short/many-long guard shape.
 
 ## Invariants
 

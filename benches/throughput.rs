@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use md5::{Digest as _, Md5 as RustCryptoMd5};
-use md5_many::{Md5Many, md5};
+use md5_many::{Md5 as Md5ManyStreaming, Md5Many, md5};
 use std::hint::black_box;
 
 fn bench_single(c: &mut Criterion) {
@@ -9,6 +9,9 @@ fn bench_single(c: &mut Criterion) {
     group.throughput(Throughput::Bytes(data.len() as u64));
 
     group.bench_function("md5-many", |b| b.iter(|| black_box(md5(black_box(&data)))));
+    group.bench_function("md5-many-streaming", |b| {
+        b.iter(|| black_box(Md5ManyStreaming::digest(black_box(&data))))
+    });
     group.bench_function("rustcrypto-md5", |b| {
         b.iter(|| black_box(RustCryptoMd5::digest(black_box(&data))))
     });
