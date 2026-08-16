@@ -145,6 +145,47 @@ fn prefer_dual_scalar_pair(inputs: &[&[u8]]) -> bool {
     max_blocks <= 32 || min_blocks.saturating_mul(16) >= max_blocks
 }
 
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn hash_three_dual_scalar(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    if !amd_family_19h() || !x86_has_bmi1() || inputs.len() != 3 {
+        return false;
+    }
+
+    // Pair the two longest messages to maximize the common dual-GPR prefix.
+    let mut order = [0usize, 1, 2];
+    let blocks = [
+        padded_blocks_for_len(inputs[0].len()),
+        padded_blocks_for_len(inputs[1].len()),
+        padded_blocks_for_len(inputs[2].len()),
+    ];
+    if blocks[order[0]] > blocks[order[1]] {
+        order.swap(0, 1);
+    }
+    if blocks[order[1]] > blocks[order[2]] {
+        order.swap(1, 2);
+    }
+    if blocks[order[0]] > blocks[order[1]] {
+        order.swap(0, 1);
+    }
+
+    // Sparse AVX2 remains decisively better for equal and near-equal triples.
+    // Split only when at most one lane carries more than a quarter of the
+    // longest lane's padded-block work; this crossover is stable from 4 KiB
+    // through 64 KiB on the measured AMD Family 19h host.
+    if blocks[order[1]].saturating_mul(4) > blocks[order[2]] {
+        return false;
+    }
+
+    // SAFETY: x86_has_bmi1() checked CPUID above.
+    let pair =
+        unsafe { crate::scalar_x86_64_dual::hash_pair_bmi1([inputs[order[1]], inputs[order[2]]]) };
+    outputs[order[1]] = pair[0];
+    outputs[order[2]] = pair[1];
+    outputs[order[0]] = scalar::hash(inputs[order[0]]);
+    true
+}
+
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fearless_simd::kernel!(
     #[inline]
@@ -5708,6 +5749,12 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
             continue;
         }
 
+        #[cfg(target_arch = "x86_64")]
+        if hash_three_dual_scalar(input_chunk, output_chunk) {
+            start = end;
+            continue;
+        }
+
         let same_len = input_chunk
             .first()
             .is_none_or(|first| input_chunk.iter().all(|input| input.len() == first.len()));
@@ -5910,6 +5957,12 @@ fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) 
 
         if input_chunk.len() == 1 {
             output_chunk[0] = scalar::hash(input_chunk[0]);
+            start = end;
+            continue;
+        }
+
+        #[cfg(target_arch = "x86_64")]
+        if hash_three_dual_scalar(input_chunk, output_chunk) {
             start = end;
             continue;
         }

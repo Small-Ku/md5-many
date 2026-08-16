@@ -419,13 +419,16 @@ mod tests {
         let detected = fearless_simd::Level::new();
         if let Some(avx2) = detected.as_avx2() {
             let engine = Md5Many::from_level(fearless_simd::Level::Avx2(avx2));
-            for (count, short_count) in [(9, 4), (15, 7), (17, 8), (23, 8), (26, 8), (31, 15)] {
+            for (count, short_count) in
+                [(3, 2), (9, 4), (15, 7), (17, 8), (23, 8), (26, 8), (31, 15)]
+            {
                 check(engine, count, short_count);
             }
         }
         if let Some(avx512) = detected.as_avx512() {
             let engine = Md5Many::from_level(fearless_simd::Level::Avx512(avx512));
             for (count, short_count) in [
+                (3, 2),
                 (17, 8),
                 (31, 15),
                 (33, 16),
