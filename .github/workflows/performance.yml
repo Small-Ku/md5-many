@@ -5,9 +5,9 @@ on:
   workflow_dispatch:
     inputs:
       compare_ref:
-        description: Git ref to use as the baseline (defaults to the latest published prerelease)
-        required: true
-        default: v0.1.0-alpha.2
+        description: Optional baseline ref override (blank = latest previous reachable release tag)
+        required: false
+        default: ''
         type: string
       scope:
         description: Benchmark scope
@@ -54,28 +54,48 @@ jobs:
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     steps:
-      - name: Checkout baseline
-        uses: actions/checkout@v5
-        with:
-          repository: ${{ github.repository }}
-          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.compare_ref }}
-          path: base
-          fetch-depth: 1
-          persist-credentials: false
-
       - name: Checkout candidate
         uses: actions/checkout@v5
         with:
           repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
           ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
           path: head
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
+      - name: Resolve performance baseline
+        env:
+          PR_BASE_SHA: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || '' }}
+          PERF_COMPARE_REF_OVERRIDE: ${{ github.event_name == 'workflow_dispatch' && inputs.compare_ref || '' }}
+        run: |
+          if [[ -n "$PR_BASE_SHA" ]]; then
+            baseline=$PR_BASE_SHA
+          else
+            baseline=$(head/.github/scripts/resolve-perf-baseline.sh head "$PERF_COMPARE_REF_OVERRIDE")
+          fi
+          echo "PERF_BASE_REF=$baseline" >> "$GITHUB_ENV"
+          echo "Selected performance baseline: $baseline"
+
+      - name: Checkout PR baseline
+        if: github.event_name == 'pull_request'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event.pull_request.base.sha }}
+          path: base
           fetch-depth: 1
           persist-credentials: false
+
+      - name: Materialize release baseline
+        if: github.event_name == 'workflow_dispatch'
+        run: git -C head worktree add --detach "$GITHUB_WORKSPACE/base" "$PERF_BASE_REF"
 
       - name: Resolve comparison SHAs
         run: |
           echo "PERF_BASE_SHA=$(git -C base rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "PERF_HEAD_SHA=$(git -C head rev-parse HEAD)" >> "$GITHUB_ENV"
+          echo "Performance baseline ref: $PERF_BASE_REF" >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install Rust ${{ env.RUST_VERSION }}
         run: |
