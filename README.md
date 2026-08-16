@@ -8,12 +8,12 @@ High-throughput MD5 for Rust, with an optimized single-stream path and runtime-d
 
 A single MD5 stream has a dependency between consecutive 64-byte blocks, so wide SIMD is most useful when several independent messages are available at once. `md5-many` therefore exposes two complementary paths:
 
-- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compressor; the one-shot `md5()` path can additionally select an XMM-width AVX-512VL compressor on supported Intel CPUs. Other targets retain the portable Rust compressor.
+- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compressor; `md5()` and the streaming `Md5` path can additionally select an XMM-width AVX-512VL compressor on supported Intel CPUs. Other targets retain the portable Rust compressor.
 - `Md5Many`: batches independent messages into SIMD lanes and chooses a scheduler appropriate to the detected CPU and workload.
 
 On x86 the specialized backend currently includes:
 
-- One-shot single-stream AVX-512VL: XMM registers with `VPTERNLOGD`/`VPROLD`, selected only on supported Intel CPUs; AMD AVX-512 stays on the faster NoLEA scalar path.
+- Single-stream AVX-512VL: XMM registers with `VPTERNLOGD`/`VPROLD`, selected only on supported Intel CPUs for one-shot and streaming hashing; AMD AVX-512 stays on the faster NoLEA scalar path.
 - AVX2: 8-message native kernels plus interleaved 16-message dual-chain and 24-message triple-chain kernels.
 - AVX-512: 16-message native kernels plus interleaved 32-message dual-chain and 48-message triple-chain kernels.
 - AVX-512 rounds use `VPTERNLOGD` for the MD5 Boolean functions and `VPROLD` for rotates.

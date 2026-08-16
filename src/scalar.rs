@@ -121,7 +121,12 @@ fn compress_block_portable(state: &mut [u32; 4], block: &[u8; 64]) {
 pub(crate) fn compress_block(state: &mut [u32; 4], block: &[u8; 64]) {
     #[cfg(target_arch = "x86_64")]
     {
-        crate::scalar_x86_64::compress_block(state, block);
+        if crate::scalar_x86_64_avx512::is_preferred() {
+            // SAFETY: runtime feature detection above verifies AVX-512F + AVX-512VL.
+            unsafe { crate::scalar_x86_64_avx512::compress_block(state, block) };
+        } else {
+            crate::scalar_x86_64::compress_block(state, block);
+        }
     }
     #[cfg(not(target_arch = "x86_64"))]
     {
@@ -132,8 +137,24 @@ pub(crate) fn compress_block(state: &mut [u32; 4], block: &[u8; 64]) {
 #[cfg(feature = "digest")]
 #[inline]
 pub(crate) fn compress_blocks(state: &mut [u32; 4], blocks: &[[u8; 64]]) {
-    for block in blocks {
-        compress_block(state, block);
+    #[cfg(target_arch = "x86_64")]
+    {
+        if crate::scalar_x86_64_avx512::is_preferred() {
+            for block in blocks {
+                // SAFETY: runtime feature detection above verifies AVX-512F + AVX-512VL.
+                unsafe { crate::scalar_x86_64_avx512::compress_block(state, block) };
+            }
+        } else {
+            for block in blocks {
+                crate::scalar_x86_64::compress_block(state, block);
+            }
+        }
+    }
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        for block in blocks {
+            compress_block_portable(state, block);
+        }
     }
 }
 
