@@ -108,7 +108,7 @@ The Criterion suite contains:
 - lane-fill crossover measurements;
 - partial-batch scaling around native, dual, and triple scheduler boundaries;
 - short mixed-length padding-boundary workloads;
-- a deliberately skewed under-filled mixed batch to catch divergent-tail regressions;
+- deliberately skewed under-filled mixed batches, including a two-message long partition, to catch divergent-tail and low-occupancy regressions;
 - one-, two-, and three-native-batch mixed workloads around 64 KiB;
 - batch scaling through eight native SIMD groups;
 - on AVX-512 x86 hosts, forced `auto` versus AVX2 comparisons for 8-message equal/mixed 1 KiB and 64 KiB workloads, so small-batch crossover changes can be measured without relying on Criterion history.

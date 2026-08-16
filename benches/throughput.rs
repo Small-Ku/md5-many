@@ -281,6 +281,59 @@ fn bench_x86_small_batch_dispatch(c: &mut Criterion) {
 #[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
 fn bench_x86_small_batch_dispatch(_c: &mut Criterion) {}
 
+#[cfg(target_arch = "x86_64")]
+fn bench_x86_two_message_paths(c: &mut Criterion) {
+    use fearless_simd::Level;
+
+    let detected = Level::new();
+    let Some(avx2) = detected.as_avx2() else {
+        return;
+    };
+    let engine = Md5Many::from_level(Level::Avx2(avx2));
+
+    let pair_storage = [vec![0x31; 65_472], vec![0xa7; 65_536]];
+    let pair_inputs: [&[u8]; 2] = [&pair_storage[0], &pair_storage[1]];
+    let mut pair_outputs = [[0u8; 16]; 2];
+    let pair_total = pair_inputs.iter().map(|input| input.len()).sum::<usize>();
+
+    let mut pair_group = c.benchmark_group("x86-two-message-near-64KiB");
+    pair_group.throughput(Throughput::Bytes(pair_total as u64));
+    pair_group.bench_function("forced-avx2", |b| {
+        b.iter(|| {
+            engine.hash_many(black_box(&pair_inputs), black_box(&mut pair_outputs));
+            black_box(&pair_outputs);
+        })
+    });
+    pair_group.finish();
+
+    let skew_storage: Vec<Vec<u8>> = (0..10)
+        .map(|lane| {
+            let size = match lane {
+                0..=7 => 1024,
+                8 => 65_472,
+                _ => 65_536,
+            };
+            vec![(lane as u8).wrapping_mul(53); size]
+        })
+        .collect();
+    let skew_inputs: Vec<&[u8]> = skew_storage.iter().map(Vec::as_slice).collect();
+    let skew_total = skew_inputs.iter().map(|input| input.len()).sum::<usize>();
+    let mut skew_outputs = [[0u8; 16]; 10];
+
+    let mut skew_group = c.benchmark_group("x86-skewed-two-message-partition");
+    skew_group.throughput(Throughput::Bytes(skew_total as u64));
+    skew_group.bench_function("forced-avx2", |b| {
+        b.iter(|| {
+            engine.hash_many(black_box(&skew_inputs), black_box(&mut skew_outputs));
+            black_box(&skew_outputs);
+        })
+    });
+    skew_group.finish();
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn bench_x86_two_message_paths(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_single,
@@ -292,5 +345,6 @@ criterion_group!(
     bench_partial_batch_scaling,
     bench_batch_scaling,
     bench_x86_small_batch_dispatch,
+    bench_x86_two_message_paths,
 );
 criterion_main!(benches);
