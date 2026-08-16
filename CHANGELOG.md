@@ -4,8 +4,13 @@ All notable changes to `md5-many` will be documented in this file.
 
 ## Unreleased
 
+## 0.1.0-alpha.3 - 2026-08-17
+
+Post-alpha.2 performance validation and CI hardening, including an independently confirmed Intel single-stream improvement.
+
 - Centralize measured backend/scheduler crossover evidence, rejected optimization experiments, and current AArch64 observations in `docs/performance.md`; keep README and developer guidance focused on policy rather than benchmark tables.
-- Keep Intel AVX-512VL single-stream state in XMM registers across consecutive blocks, removing the per-block scalar/XMM bridge. On the measured Xeon Platinum 8573C this improves 4 KiB–1 MiB one-shot and streaming throughput by about 4.6–4.7% over `0.1.0-alpha.2`.
+- Keep Intel AVX-512VL single-stream state in XMM registers across consecutive blocks, removing the per-block scalar/XMM bridge. On a measured Xeon Platinum 8573C this improves 4 KiB–1 MiB one-shot and streaming throughput by about 4.6–4.7% over `0.1.0-alpha.2`; an independent GitHub-hosted 8573C ABBA comparison reproduced a 5.58% execution-time reduction for the 1 MiB sentinel.
+- Add x86-64 and native AArch64 verification jobs plus an explicit Rust 1.89 MSRV check; preserve compatibility with the older unsafe CPUID intrinsics while keeping current-stable clippy clean.
 - Make the GitHub Actions performance guard bidirectional (ABBA), requiring regressions to reproduce in both base/head measurement orders before they can block a PR; same-SHA manual runs are reported explicitly as runner-noise calibration.
 - Resolve manual performance baselines from the latest previous reachable release tag automatically, so new release tags do not require editing the workflow default.
 - Chain performance sentinels behind correctness, MSRV, and quality/package CI jobs for pull requests, `master` pushes, and manual CI runs; non-PR runs automatically compare against the latest previous reachable release tag. Keep the separate Performance workflow for manual full-suite comparisons only.
