@@ -79,7 +79,7 @@ copy_named_baseline() {
 
   if (( count == 0 )); then
     echo "no Criterion baseline named $baseline was produced" >&2
-    exit 1
+    return 1
   fi
 }
 
@@ -118,12 +118,31 @@ mkdir -p "$report_root/forward" "$report_root/reverse"
 # both measurement orders.
 for index in "${!filters[@]}"; do
   filter=${filters[$index]}
+  optional=false
+  if [[ $filter == \?* ]]; then
+    optional=true
+    filter=${filter#\?}
+  fi
   forward_baseline="${baseline_prefix}-f${index}"
   reverse_baseline="${baseline_prefix}-r${index}"
 
-  # A: baseline revision.
+  # A: baseline revision. Hardware-specific sentinels may be explicitly marked
+  # optional with a leading '?'. If the baseline produces no matching Criterion
+  # data (for example an AVX-512-only benchmark on an AVX2 runner), skip that
+  # filter. Required filters still fail loudly so typos or removed benchmarks
+  # cannot silently weaken the regression guard.
   run_bench "$base_manifest" "$base_target" --save-baseline "$forward_baseline" "$filter"
-  copy_named_baseline "$base_target" "$head_target" "$forward_baseline"
+  if ! copy_named_baseline "$base_target" "$head_target" "$forward_baseline"; then
+    if [[ $optional == true ]]; then
+      echo "::notice::Skipping optional performance filter '$filter': baseline produced no benchmark on this runner"
+      if [[ -n ${GITHUB_STEP_SUMMARY:-} ]]; then
+        echo "- SKIP \`$filter\`: baseline produced no benchmark on this runner." >> "$GITHUB_STEP_SUMMARY"
+      fi
+      continue
+    fi
+    echo "required performance filter '$filter' produced no Criterion baseline" >&2
+    exit 1
+  fi
 
   # B: candidate revision compared with A.
   clear_changes "$head_target"

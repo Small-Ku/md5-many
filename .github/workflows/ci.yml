@@ -84,7 +84,7 @@ jobs:
         include:
           - arch: x86_64
             runner: ubuntu-24.04
-            sentinels: single-stream-1MiB|many-65536-bytes|x86-two-message-near-64KiB|x86-small-skew|x86-small-batch
+            sentinels: single-stream-1MiB|many-65536-bytes|x86-two-message-near-64KiB|x86-small-skew|?x86-small-batch
           - arch: aarch64
             runner: ubuntu-24.04-arm
             sentinels: single-stream-1MiB|many-65536-bytes|lane-fill-64KiB|mixed-short

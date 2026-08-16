@@ -8,6 +8,7 @@ All notable changes to `md5-many` will be documented in this file.
 - Make the GitHub Actions performance guard bidirectional (ABBA), requiring regressions to reproduce in both base/head measurement orders before they can block a PR; same-SHA manual runs are reported explicitly as runner-noise calibration.
 - Resolve manual performance baselines from the latest previous reachable release tag automatically, so new release tags do not require editing the workflow default.
 - Chain performance sentinels behind correctness, MSRV, and quality/package CI jobs for pull requests, `master` pushes, and manual CI runs; non-PR runs automatically compare against the latest previous reachable release tag. Keep the separate Performance workflow for manual full-suite comparisons only.
+- Let explicitly hardware-gated performance sentinels skip cleanly when the runner lacks their ISA while keeping all ordinary sentinel filters strict; this prevents AVX2-only x86 runners from failing solely because the AVX-512 small-batch benchmark intentionally does not exist there.
 - Avoid compiling the x86-only padded-block helper on AArch64, removing a benchmark-build dead-code warning.
 
 ## 0.1.0-alpha.2 - 2026-08-16
