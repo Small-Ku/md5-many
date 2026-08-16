@@ -77,7 +77,6 @@ jobs:
 
   performance:
     name: Performance guard (${{ matrix.arch }})
-    if: github.event_name == 'pull_request'
     needs: [test, quality, msrv]
     strategy:
       fail-fast: false
@@ -97,7 +96,8 @@ jobs:
       PERF_WARMUP_SECONDS: 1
       PERF_MEASUREMENT_SECONDS: 2
     steps:
-      - name: Checkout candidate
+      - name: Checkout PR candidate
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v5
         with:
           repository: ${{ github.event.pull_request.head.repo.full_name }}
@@ -106,7 +106,19 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Checkout branch candidate
+        if: github.event_name != 'pull_request'
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.sha }}
+          path: head
+          fetch-depth: 0
+          fetch-tags: true
+          persist-credentials: false
+
       - name: Checkout PR baseline
+        if: github.event_name == 'pull_request'
         uses: actions/checkout@v5
         with:
           repository: ${{ github.repository }}
@@ -115,11 +127,24 @@ jobs:
           fetch-depth: 1
           persist-credentials: false
 
+      - name: Resolve release baseline
+        if: github.event_name != 'pull_request'
+        run: |
+          baseline=$(head/.github/scripts/resolve-perf-baseline.sh head "")
+          echo "PERF_BASE_REF=$baseline" >> "$GITHUB_ENV"
+          git -C head worktree add --detach "$GITHUB_WORKSPACE/base" "$baseline"
+          echo "Performance baseline ref: $baseline" >> "$GITHUB_STEP_SUMMARY"
+
       - name: Resolve comparison SHAs
         run: |
           echo "PERF_BASE_SHA=$(git -C base rev-parse HEAD)" >> "$GITHUB_ENV"
           echo "PERF_HEAD_SHA=$(git -C head rev-parse HEAD)" >> "$GITHUB_ENV"
-          echo "PR performance runs only after test, quality, and MSRV jobs succeed." >> "$GITHUB_STEP_SUMMARY"
+          if [[ "${{ github.event_name }}" == pull_request ]]; then
+            echo "PR baseline: ${{ github.event.pull_request.base.sha }}" >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "Branch/manual performance runs compare the candidate with the previous reachable release." >> "$GITHUB_STEP_SUMMARY"
+          fi
+          echo "Performance runs only after test, quality, and MSRV jobs succeed." >> "$GITHUB_STEP_SUMMARY"
 
       - name: Install Rust ${{ env.RUST_VERSION }}
         run: |
