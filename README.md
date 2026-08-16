@@ -33,7 +33,7 @@ Other `fearless_simd` targets retain the portable multi-buffer implementation, i
 
 ```toml
 [dependencies]
-md5-many = "0.1.0-alpha.1"
+md5-many = "0.1.0-alpha.2"
 ```
 
 ### Single message
@@ -90,7 +90,7 @@ let result = hasher.finalize();
 
 ```toml
 [dependencies]
-md5-many = { version = "0.1.0-alpha.1", default-features = false, features = ["libm", "digest"] }
+md5-many = { version = "0.1.0-alpha.2", default-features = false, features = ["libm", "digest"] }
 ```
 
 Or omit `digest` if the block-trait adapter is not needed.
