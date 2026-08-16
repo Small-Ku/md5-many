@@ -21,7 +21,13 @@ fn round_i(x: u32, y: u32, z: u32) -> u32 {
 }
 
 #[inline]
-#[cfg_attr(target_arch = "x86_64", allow(dead_code))]
+#[cfg_attr(
+    any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_endian = "little")
+    ),
+    allow(dead_code)
+)]
 fn compress_block_portable(state: &mut [u32; 4], block: &[u8; 64]) {
     let load = |word: usize| -> u32 {
         debug_assert!(word < 16);
@@ -128,7 +134,14 @@ pub(crate) fn compress_block(state: &mut [u32; 4], block: &[u8; 64]) {
             crate::scalar_x86_64::compress_block(state, block);
         }
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        crate::scalar_aarch64::compress_block(state, block);
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_endian = "little")
+    )))]
     {
         compress_block_portable(state, block);
     }
@@ -150,7 +163,16 @@ pub(crate) fn compress_blocks(state: &mut [u32; 4], blocks: &[[u8; 64]]) {
             }
         }
     }
-    #[cfg(not(target_arch = "x86_64"))]
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    {
+        for block in blocks {
+            crate::scalar_aarch64::compress_block(state, block);
+        }
+    }
+    #[cfg(not(any(
+        target_arch = "x86_64",
+        all(target_arch = "aarch64", target_endian = "little")
+    )))]
     {
         for block in blocks {
             compress_block_portable(state, block);
@@ -269,6 +291,36 @@ mod tests {
                 unsafe { crate::scalar_x86_64_avx512::compress_block(&mut avx512, &block) };
                 assert_eq!(avx512, portable, "avx512 case={case}");
             }
+        }
+    }
+}
+
+#[cfg(all(test, target_arch = "aarch64", target_endian = "little"))]
+mod aarch64_tests {
+    use super::compress_block_portable;
+
+    #[test]
+    fn aarch64_backend_matches_portable_compression() {
+        let mut seed = 0x9e37_79b9_7f4a_7c15u64;
+        for case in 0..256u32 {
+            let mut block = [0u8; 64];
+            for byte in &mut block {
+                seed ^= seed << 13;
+                seed ^= seed >> 7;
+                seed ^= seed << 17;
+                *byte = seed as u8;
+            }
+            let initial = [
+                0x6745_2301u32 ^ case,
+                0xefcd_ab89u32.wrapping_add(case),
+                0x98ba_dcfeu32.rotate_left(case & 31),
+                0x1032_5476u32.wrapping_sub(case),
+            ];
+            let mut portable = initial;
+            let mut optimized = initial;
+            compress_block_portable(&mut portable, &block);
+            crate::scalar_aarch64::compress_block(&mut optimized, &block);
+            assert_eq!(optimized, portable, "aarch64 case={case}");
         }
     }
 }

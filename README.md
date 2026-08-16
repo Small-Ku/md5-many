@@ -8,7 +8,7 @@ High-throughput MD5 for Rust, with an optimized single-stream path and runtime-d
 
 A single MD5 stream has a dependency between consecutive 64-byte blocks, so wide SIMD is most useful when several independent messages are available at once. `md5-many` therefore exposes two complementary paths:
 
-- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compressor; `md5()` and the streaming `Md5` path can additionally select an XMM-width AVX-512VL compressor on supported Intel CPUs. Other targets retain the portable Rust compressor.
+- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compressor; `md5()` and the streaming `Md5` path can additionally select an XMM-width AVX-512VL compressor on supported Intel CPUs. Little-endian AArch64 uses a hand-scheduled integer compressor. Other targets retain the portable Rust compressor.
 - `Md5Many`: batches independent messages into SIMD lanes and chooses a scheduler appropriate to the detected CPU and workload.
 
 On x86 the specialized backend currently includes:
@@ -23,6 +23,8 @@ On x86 the specialized backend currently includes:
 - Highly skewed mixed batches, including under-filled dual/triple candidates, are repartitioned without allocation so one short message does not force many long messages through a slow divergent tail.
 - On AVX2, only a two-message batch that fits in one padded MD5 block prefers scalar hashing; three or more messages use SIMD.
 - AVX-512 small batches remain on AVX2 by default. A narrowly measured x86 family 6/model `0xCF` tuning uses padded AVX-512 for 2-8-message equal or mixed batches once every message is at least 512 B; other AVX-512 CPUs keep the conservative AVX2 choice until measured.
+
+Little-endian AArch64 uses a separate hand-scheduled single-stream integer kernel with paired message/constant loads, `BIC`/`ORN` Boolean forms, and immediate `ROR`. Multi-buffer AArch64 hashing remains on the `fearless_simd` NEON path.
 
 Other `fearless_simd` targets retain the portable multi-buffer implementation, including SSE-class x86, AArch64 NEON, WASM SIMD, and scalar fallback as supported by the selected `fearless_simd` release.
 
@@ -132,8 +134,10 @@ The optimized x86-64 scalar compressor is a direct Rust port of the
 `md5_block_noleag` scheduling from `animetosho/md5-optimisation` commit
 `7cd4ad511f8cddbeed584c4087fb9506d94e8b87`. The XMM-width single-stream
 AVX-512VL compressor ports the same repository's `md5_block_avx512` packed
-message/constant schedule. Its author releases that source into the Public
-Domain, or under CC0-1.0 where a public-domain dedication is not recognized.
+message/constant schedule. The little-endian AArch64 scalar kernel is based on
+the same repository's `md5-arm64-asm.h` scheduling ideas, rewritten as Rust
+inline assembly. Its author releases that source into the Public Domain, or
+under CC0-1.0 where a public-domain dedication is not recognized.
 
 ## License
 
