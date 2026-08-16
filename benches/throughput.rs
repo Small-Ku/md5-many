@@ -334,6 +334,47 @@ fn bench_x86_two_message_paths(c: &mut Criterion) {
 #[cfg(not(target_arch = "x86_64"))]
 fn bench_x86_two_message_paths(_c: &mut Criterion) {}
 
+#[cfg(target_arch = "x86_64")]
+fn bench_x86_small_skew_tails(c: &mut Criterion) {
+    let engine = Md5Many::new();
+
+    for (name, lengths) in [
+        ("triple-quarter-gap", vec![64usize, 1_024, 4_096]),
+        ("four-two-plus-two", vec![64, 64, 4_096, 4_096]),
+        (
+            "eight-six-plus-two",
+            vec![64, 64, 64, 64, 64, 64, 65_536, 65_536],
+        ),
+        (
+            "eight-one-short-guard",
+            vec![
+                16_384, 65_536, 65_536, 65_536, 65_536, 65_536, 65_536, 65_536,
+            ],
+        ),
+    ] {
+        let storage: Vec<Vec<u8>> = lengths
+            .iter()
+            .enumerate()
+            .map(|(lane, &len)| vec![(lane as u8).wrapping_mul(43); len])
+            .collect();
+        let inputs: Vec<&[u8]> = storage.iter().map(Vec::as_slice).collect();
+        let total: usize = lengths.iter().sum();
+        let mut outputs = vec![[0u8; 16]; inputs.len()];
+        let mut group = c.benchmark_group(format!("x86-small-skew-{name}"));
+        group.throughput(Throughput::Bytes(total as u64));
+        group.bench_function("auto", |b| {
+            b.iter(|| {
+                engine.hash_many(black_box(&inputs), black_box(&mut outputs));
+                black_box(&outputs);
+            })
+        });
+        group.finish();
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn bench_x86_small_skew_tails(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_single,
@@ -346,5 +387,6 @@ criterion_group!(
     bench_batch_scaling,
     bench_x86_small_batch_dispatch,
     bench_x86_two_message_paths,
+    bench_x86_small_skew_tails,
 );
 criterion_main!(benches);
