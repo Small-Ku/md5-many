@@ -5678,6 +5678,19 @@ fn hash_many_avx2(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
             .unwrap_or(0);
         let prefer_scalar = input_chunk.len() == 2 && max_padded_blocks == 1;
 
+        // On measured AMD family 19h cores, two independent scalar GPR
+        // chains beat both an under-filled 8-lane AVX2 kernel and sequential
+        // scalar hashing. Keep this tuning deliberately narrow until other
+        // x86 families have equivalent measurements. Skew partitioning can
+        // recurse into this path for a two-message subgroup as well.
+        #[cfg(target_arch = "x86_64")]
+        if input_chunk.len() == 2 && amd_family_19h() {
+            let digests = crate::scalar_x86_64_dual::hash_pair([input_chunk[0], input_chunk[1]]);
+            output_chunk.copy_from_slice(&digests);
+            start = end;
+            continue;
+        }
+
         if prefer_scalar {
             for (input, output) in input_chunk.iter().zip(output_chunk) {
                 *output = scalar::hash(input);

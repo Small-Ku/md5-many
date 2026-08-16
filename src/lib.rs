@@ -25,6 +25,8 @@ mod scalar_aarch64;
 mod scalar_x86_64;
 #[cfg(target_arch = "x86_64")]
 mod scalar_x86_64_avx512;
+#[cfg(target_arch = "x86_64")]
+mod scalar_x86_64_dual;
 mod simd;
 
 #[cfg(feature = "digest")]
