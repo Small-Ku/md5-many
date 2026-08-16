@@ -21,8 +21,8 @@ On x86 the specialized backend currently includes:
 - Mixed-length inputs process the common full-block prefix at full SIMD speed, then handle only divergent tails separately.
 - Partial batches can duplicate the last real input into unused lanes so they still benefit from dual/triple instruction-level parallelism instead of falling into a small tail.
 - Highly skewed mixed batches, including under-filled dual/triple candidates, are repartitioned without allocation so one short message does not force many long messages through a slow divergent tail.
-- On measured AMD family 19h x86-64 CPUs with BMI1, two-message batches can use a dual-scalar GPR kernel that interleaves two independent NoLEA/G-shortcut chains and uses three-operand `ANDN` in the throughput-bound G/I rounds. A CPUID check and overlap-aware skew guard keep unsupported or extremely unbalanced long pairs on the existing path. Three-message tails normally stay on sparse AVX2, but a strongly skewed triple (second-longest padded work at most one quarter of the longest) pairs the two longest messages and hashes the third scalar; this avoids a measured 9–31% divergence penalty. Other x86 CPUs retain the conservative scalar/AVX2 crossover.
-- Small 4–8-message AVX2 tails reuse the no-allocation skew partitioner only when the long partition shrinks to at most two messages. That keeps one-short/many-long cases on SIMD, while clustered short/long tails can recurse into scalar or dual-scalar work instead of carrying one or two long lanes through a sparse vector; measured extreme-skew wins are about 24–28% on the same AMD Family 19h host.
+- On measured AMD family 19h x86-64 CPUs with BMI1, low-occupancy and strongly skewed tails can switch between sparse AVX2, an interleaved dual-scalar GPR backend, and recursive skew partitions. Explicit CPUID and overlap/partition guards keep unsupported or unfavorable shapes on the conservative path.
+- Small 4–8-message AVX2 tails reuse the no-allocation skew partitioner only when the long partition shrinks to at most two messages; one-short/many-long cases remain on SIMD.
 - AVX-512 small batches remain on AVX2 by default. A narrowly measured x86 family 6/model `0xCF` tuning uses padded AVX-512 for 2-8-message equal or mixed batches once every message is at least 512 B; other AVX-512 CPUs keep the conservative AVX2 choice until measured.
 
 Little-endian AArch64 uses a separate hand-scheduled single-stream integer kernel with paired message/constant loads, `BIC`/`ORN` Boolean forms, and immediate `ROR`. Multi-buffer AArch64 hashing remains on the `fearless_simd` NEON path.
@@ -121,6 +121,8 @@ cargo run --release --example probe
 ```
 
 A Zen 3 CPU such as a Ryzen 7 5800X3D reports an 8-lane AVX2 engine. An AVX-512-capable host reports 16 native lanes, while the scheduler may internally interleave two or three native groups to expose more instruction-level parallelism.
+
+Backend and scheduler choices are based on measured CPU-specific crossovers rather than ISA availability alone. See [`docs/performance.md`](docs/performance.md) for the benchmark evidence behind the Intel/AMD single-stream split, AVX2/AVX-512 batch crossovers, low-occupancy heuristics, rejected experiments, and current AArch64 observations.
 
 ## `no_std` verification
 

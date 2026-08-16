@@ -4,6 +4,7 @@ All notable changes to `md5-many` will be documented in this file.
 
 ## Unreleased
 
+- Centralize measured backend/scheduler crossover evidence, rejected optimization experiments, and current AArch64 observations in `docs/performance.md`; keep README and developer guidance focused on policy rather than benchmark tables.
 - Keep Intel AVX-512VL single-stream state in XMM registers across consecutive blocks, removing the per-block scalar/XMM bridge. On the measured Xeon Platinum 8573C this improves 4 KiB–1 MiB one-shot and streaming throughput by about 4.6–4.7% over `0.1.0-alpha.2`.
 - Make the GitHub Actions performance guard bidirectional (ABBA), requiring regressions to reproduce in both base/head measurement orders before they can block a PR; same-SHA manual runs are reported explicitly as runner-noise calibration.
 - Resolve manual performance baselines from the latest previous reachable release tag automatically, so new release tags do not require editing the workflow default.
