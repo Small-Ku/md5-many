@@ -42,6 +42,7 @@ enum X86TuningClass {
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline]
+#[allow(unused_unsafe)]
 fn x86_tuning_class() -> X86TuningClass {
     use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -55,9 +56,11 @@ fn x86_tuning_class() -> X86TuningClass {
         _ => {}
     }
 
-    // x86/x86_64 always supports the basic CPUID leaves queried here.
-    let leaf0 = __cpuid(0);
-    let leaf1 = __cpuid(1);
+    // The crate's supported x86 targets provide CPUID. Rust 1.89 still
+    // declares these intrinsics unsafe, so keep the compatibility boundary
+    // explicit even though newer compilers no longer require it.
+    // SAFETY: leaf 0 and leaf 1 are basic CPUID leaves on supported x86 CPUs.
+    let (leaf0, leaf1) = unsafe { (__cpuid(0), __cpuid(1)) };
     let base_family = (leaf1.eax >> 8) & 0x0f;
     let ext_family = (leaf1.eax >> 20) & 0xff;
     let family = if base_family == 0x0f {
@@ -107,6 +110,7 @@ fn intel_family_06_model_cf() -> bool {
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline]
+#[allow(unused_unsafe)]
 fn x86_has_bmi1() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
 
@@ -120,8 +124,11 @@ fn x86_has_bmi1() -> bool {
         _ => {}
     }
 
-    let max_leaf = __cpuid(0).eax;
-    let available = max_leaf >= 7 && (__cpuid_count(7, 0).ebx & (1 << 3)) != 0;
+    // SAFETY: leaf 0 is always available on supported x86 targets; leaf 7 is
+    // queried only when leaf 0 reports that structured extended features are
+    // available. Rust 1.89 declares both intrinsics unsafe.
+    let max_leaf = unsafe { __cpuid(0) }.eax;
+    let available = max_leaf >= 7 && (unsafe { __cpuid_count(7, 0) }.ebx & (1 << 3)) != 0;
     CACHED.store(if available { 2 } else { 1 }, Ordering::Relaxed);
     available
 }

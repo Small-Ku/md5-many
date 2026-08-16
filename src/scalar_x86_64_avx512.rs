@@ -118,9 +118,11 @@ pub(crate) fn is_preferred() -> bool {
 }
 
 #[inline]
+#[allow(unused_unsafe)]
 fn is_genuine_intel() -> bool {
-    // CPUID leaf 0 is available on every x86-64 CPU.
-    let vendor = core::arch::x86_64::__cpuid(0);
+    // Rust 1.89 declares `__cpuid` unsafe; newer compilers make it safe.
+    // SAFETY: x86-64 guarantees CPUID and leaf 0 is always defined.
+    let vendor = unsafe { core::arch::x86_64::__cpuid(0) };
     vendor.ebx == 0x756e_6547 && vendor.edx == 0x4965_6e69 && vendor.ecx == 0x6c65_746e
 }
 
