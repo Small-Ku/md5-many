@@ -65,6 +65,12 @@ cargo package --locked
 
 For performance work, compare before/after with the same Criterion benchmark name and inspect release machine code when an optimization depends on a particular ISA instruction. A plausible algebraic rewrite is not sufficient reason to keep a change. On the measured Intel Xeon Platinum 8573C (family 6/model `0xCF`), retaining XMM state across AVX-512VL blocks improved the public one-shot and RustCrypto streaming paths by about 4.6–4.7% for 4 KiB–1 MiB inputs relative to the previous per-block scalar/XMM bridge; pinned-cycle comparison against forced NoLEA is about 11% faster for long single streams. On AVX-512 x86 hosts, the `x86-small-batch-*` Criterion groups compare runtime `auto` dispatch against a forced AVX2 level and should be used before changing the <=8-message crossover. The `x86-two-message-*` groups cover the dual-scalar pair path and its skew guard. The `x86-small-skew-*` groups pin the three-message quarter-gap crossover, 4–8-message clustered-tail wins, and the one-short/many-long guard shape.
 
+## GitHub Actions performance guard
+
+`.github/workflows/performance.yml` compares the PR base and candidate on the same GitHub-hosted VM instead of comparing absolute numbers across workflow runs. It keeps build outputs separate, copies only Criterion's named baseline data, pins both revisions to the same schedulable CPU, and evaluates `change/estimates.json`. Shared runners are intentionally guarded conservatively: >=3% mean slowdown is a warning; CI fails only when mean slowdown is >=7% and the 95% confidence-interval lower bound is still >=5%. RustCrypto reference benchmarks are reported by Criterion but excluded from the md5-many gate.
+
+The PR sentinel suite runs on both `ubuntu-24.04` x86-64 and `ubuntu-24.04-arm` AArch64. Manual `workflow_dispatch` runs can select the full Criterion suite and are non-blocking by default. Do not turn small cross-run throughput differences into hard gates; add a paired sentinel when a scheduler/backend crossover needs protection.
+
 ## Invariants
 
 - Edition 2024; declared MSRV Rust 1.89.

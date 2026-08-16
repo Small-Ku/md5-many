@@ -1,0 +1,123 @@
+name: Performance
+
+on:
+  pull_request:
+  workflow_dispatch:
+    inputs:
+      compare_ref:
+        description: Git ref to use as the baseline
+        required: true
+        default: master
+        type: string
+      scope:
+        description: Benchmark scope
+        required: true
+        default: full
+        type: choice
+        options:
+          - sentinels
+          - full
+      enforce:
+        description: Fail the run on a confirmed regression
+        required: true
+        default: false
+        type: boolean
+
+permissions:
+  contents: read
+
+concurrency:
+  group: perf-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  RUST_VERSION: 1.97.1
+  PERF_SAMPLE_SIZE: 20
+  PERF_WARMUP_SECONDS: 1
+  PERF_MEASUREMENT_SECONDS: 2
+
+jobs:
+  paired:
+    name: Performance guard (${{ matrix.arch }})
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            sentinels: single-stream-1MiB|many-65536-bytes|x86-two-message-near-64KiB|x86-small-skew|x86-small-batch
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            sentinels: single-stream-1MiB|many-65536-bytes|lane-fill-64KiB|mixed-short
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 45
+    steps:
+      - name: Checkout baseline
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || inputs.compare_ref }}
+          path: base
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Checkout candidate
+        uses: actions/checkout@v5
+        with:
+          repository: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name || github.repository }}
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          path: head
+          fetch-depth: 1
+          persist-credentials: false
+
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+
+      - name: Fingerprint runner
+        run: head/.github/scripts/fingerprint-runner.sh head/perf-runner.txt
+
+      - name: Fetch dependencies before measuring
+        run: |
+          cargo fetch --locked --manifest-path base/Cargo.toml
+          cargo fetch --locked --manifest-path head/Cargo.toml
+
+      - name: Paired Criterion run
+        env:
+          PERF_BASE_TARGET: ${{ runner.temp }}/perf-base
+          PERF_HEAD_TARGET: ${{ runner.temp }}/perf-head
+          PERF_BASELINE_NAME: ci-base
+          PERF_FILTERS: ${{ github.event_name == 'workflow_dispatch' && inputs.scope == 'full' && 'ALL' || matrix.sentinels }}
+        run: |
+          head/.github/scripts/run-perf-pair.sh \
+            base/Cargo.toml \
+            head/Cargo.toml \
+            "$PERF_FILTERS"
+
+      - name: Evaluate regressions
+        env:
+          PERF_HEAD_TARGET: ${{ runner.temp }}/perf-head
+        run: |
+          extra=()
+          if [[ "${{ github.event_name }}" == workflow_dispatch && "${{ inputs.enforce }}" != true ]]; then
+            extra+=(--no-fail)
+          fi
+          python3 head/.github/scripts/perf-guard.py \
+            "$PERF_HEAD_TARGET/criterion" \
+            --json-out head/perf-guard.json \
+            "${extra[@]}"
+
+      - name: Upload benchmark data
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: performance-${{ matrix.arch }}-${{ github.run_id }}
+          path: |
+            head/perf-runner.txt
+            head/perf-guard.json
+            ${{ runner.temp }}/perf-head/criterion
+          if-no-files-found: warn
+          retention-days: 14
