@@ -114,6 +114,94 @@ impl Default for Md5State {
 }
 
 #[inline]
+fn compress_all_blocks(level: Level, streams: &mut [Md5State], inputs: &[&[u8]]) {
+    debug_assert_eq!(streams.len(), inputs.len());
+    debug_assert!(streams.len() <= MAX_LANES);
+    if streams.is_empty() {
+        return;
+    }
+
+    let mut states = [STATE_INIT; MAX_LANES];
+    for (slot, stream) in streams.iter().enumerate() {
+        states[slot] = stream.state;
+    }
+    simd::compress_many_blocks_with_level(level, &mut states[..streams.len()], inputs);
+    for (slot, stream) in streams.iter_mut().enumerate() {
+        stream.state = states[slot];
+    }
+}
+
+#[inline]
+fn update_native_equal_group(level: Level, streams: &mut [Md5State], inputs: &[&[u8]]) -> bool {
+    if streams.is_empty() || streams.len() != simd::lanes_with_level(level) {
+        return false;
+    }
+
+    let input_len = inputs[0].len();
+    let buffered = streams[0].buffer_len;
+    if !inputs.iter().all(|input| input.len() == input_len)
+        || !streams.iter().all(|stream| stream.buffer_len == buffered)
+    {
+        return false;
+    }
+
+    for stream in streams.iter_mut() {
+        stream.bytes = stream.bytes.wrapping_add(input_len as u64);
+    }
+
+    let mut offset = 0;
+    if buffered != 0 {
+        let used = buffered as usize;
+        let needed = 64 - used;
+        let take = core::cmp::min(needed, input_len);
+        for lane in 0..streams.len() {
+            streams[lane].buffer[used..used + take].copy_from_slice(&inputs[lane][..take]);
+            streams[lane].buffer_len += take as u8;
+        }
+        offset = take;
+
+        if take != needed {
+            return true;
+        }
+
+        let mut block_refs: [&[u8]; MAX_LANES] = [&[]; MAX_LANES];
+        for lane in 0..streams.len() {
+            block_refs[lane] = &streams[lane].buffer;
+        }
+        let count = streams.len();
+        let mut states = [STATE_INIT; MAX_LANES];
+        for lane in 0..count {
+            states[lane] = streams[lane].state;
+        }
+        simd::compress_many_blocks_with_level(level, &mut states[..count], &block_refs[..count]);
+        for lane in 0..count {
+            streams[lane].state = states[lane];
+            streams[lane].buffer_len = 0;
+        }
+    }
+
+    let direct_len = ((input_len - offset) / 64) * 64;
+    if direct_len != 0 {
+        let mut direct_refs: [&[u8]; MAX_LANES] = [&[]; MAX_LANES];
+        for lane in 0..streams.len() {
+            direct_refs[lane] = &inputs[lane][offset..offset + direct_len];
+        }
+        let count = streams.len();
+        compress_all_blocks(level, streams, &direct_refs[..count]);
+        offset += direct_len;
+    }
+
+    let tail_len = input_len - offset;
+    if tail_len != 0 {
+        for lane in 0..streams.len() {
+            streams[lane].buffer[..tail_len].copy_from_slice(&inputs[lane][offset..]);
+            streams[lane].buffer_len = tail_len as u8;
+        }
+    }
+    true
+}
+
+#[inline]
 fn compress_selected_blocks(
     level: Level,
     streams: &mut [Md5State],
@@ -155,6 +243,11 @@ pub(crate) fn update_many_with_level(level: Level, streams: &mut [Md5State], inp
         let streams = &mut streams[group_start..group_end];
         let inputs = &inputs[group_start..group_end];
         let count = streams.len();
+
+        if update_native_equal_group(level, streams, inputs) {
+            group_start = group_end;
+            continue;
+        }
 
         let mut offsets = [0usize; MAX_LANES];
         let mut ready = [false; MAX_LANES];
