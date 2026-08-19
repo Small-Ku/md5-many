@@ -2,6 +2,8 @@ use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_m
 use md5::{Digest as _, Md5 as RustCryptoMd5};
 use md5_many::{Md5 as Md5ManyStreaming, Md5Many, Md5State, md5};
 use std::hint::black_box;
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+use std::time::Duration;
 
 fn bench_single(c: &mut Criterion) {
     let data = vec![0x5au8; 1024 * 1024];
@@ -91,6 +93,54 @@ fn bench_incremental_many(c: &mut Criterion) {
         group.finish();
     }
 }
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fn bench_x86_incremental_lockstep(c: &mut Criterion) {
+    use fearless_simd::Level;
+
+    let detected = Level::new();
+    let mut levels = [None, None, None];
+    if let Some(sse2) = detected.as_sse2() {
+        levels[0] = Some(("sse2", Level::Sse2(sse2)));
+    }
+    if let Some(avx2) = detected.as_avx2() {
+        levels[1] = Some(("avx2", Level::Avx2(avx2)));
+    }
+    if let Some(avx512) = detected.as_avx512() {
+        levels[2] = Some(("avx512", Level::Avx512(avx512)));
+    }
+
+    for (name, level) in levels.into_iter().flatten() {
+        let engine = Md5Many::from_level(level);
+        let lanes = engine.lanes();
+        let mut group = c.benchmark_group(format!("x86-incremental-lockstep-{name}"));
+        group.sample_size(10);
+        group.warm_up_time(Duration::from_millis(500));
+        group.measurement_time(Duration::from_secs(1));
+
+        for groups in 1..=3 {
+            let count = lanes * groups;
+            for &chunk_size in &[64usize, 4 * 1024] {
+                let storage: Vec<Vec<u8>> = (0..count)
+                    .map(|lane| vec![(lane as u8).wrapping_mul(67); chunk_size])
+                    .collect();
+                let inputs: Vec<&[u8]> = storage.iter().map(Vec::as_slice).collect();
+                let mut states = vec![Md5State::new(); count];
+                group.throughput(Throughput::Bytes((count * chunk_size) as u64));
+                group.bench_function(format!("{count}-streams-{chunk_size}B"), |b| {
+                    b.iter(|| {
+                        engine.update_many(black_box(&mut states), black_box(&inputs));
+                        black_box(&states);
+                    })
+                });
+            }
+        }
+        group.finish();
+    }
+}
+
+#[cfg(not(any(target_arch = "x86", target_arch = "x86_64")))]
+fn bench_x86_incremental_lockstep(_c: &mut Criterion) {}
 
 fn bench_lane_fill(c: &mut Criterion) {
     let engine = Md5Many::new();
@@ -419,6 +469,7 @@ criterion_group!(
     bench_single,
     bench_many,
     bench_incremental_many,
+    bench_x86_incremental_lockstep,
     bench_lane_fill,
     bench_mixed_short,
     bench_skewed_partial,
