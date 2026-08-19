@@ -10,9 +10,10 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use core::arch::x86_64::{
     __m128i, _mm_add_epi32, _mm_cvtsi32_si128, _mm_cvtsi128_si32, _mm_loadu_si128, _mm_rol_epi32,
-    _mm_srli_epi64, _mm_srli_si128, _mm_storeu_si128, _mm_ternarylogic_epi32, _mm_unpackhi_epi64,
-    _mm_unpacklo_epi32, _mm_unpacklo_epi64,
+    _mm_srli_epi64, _mm_srli_si128, _mm_ternarylogic_epi32, _mm_unpackhi_epi64,
 };
+#[cfg(feature = "bench-internals")]
+use core::arch::x86_64::{_mm_storeu_si128, _mm_unpacklo_epi32, _mm_unpacklo_epi64};
 
 use crate::consts::STATE_INIT;
 

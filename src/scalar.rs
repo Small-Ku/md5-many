@@ -198,6 +198,7 @@ pub(crate) fn hash(input: &[u8]) -> [u8; 16] {
     }
 }
 
+#[cfg(any(not(target_arch = "x86_64"), feature = "bench-internals"))]
 pub(crate) fn hash_generic(input: &[u8]) -> [u8; 16] {
     let mut state = STATE_INIT;
     let mut chunks = input.chunks_exact(64);
@@ -228,6 +229,7 @@ pub(crate) fn hash_generic(input: &[u8]) -> [u8; 16] {
     state_to_bytes(state)
 }
 
+#[cfg(any(not(target_arch = "x86_64"), feature = "bench-internals"))]
 #[inline]
 pub(crate) fn hash_short_one_block(input: &[u8]) -> [u8; 16] {
     assert!(input.len() <= 55);
