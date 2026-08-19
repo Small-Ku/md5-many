@@ -25,6 +25,9 @@ libm = ["fearless_simd/libm"]
 # RustCrypto Digest trait compatibility.
 digest = ["dep:digest"]
 
+# Internal-only hooks used by the backend microbenchmark suite.
+bench-internals = []
+
 [dependencies]
 fearless_simd = { version = "0.7.0", default-features = false }
 digest = { version = "0.11.3", default-features = false, features = [
@@ -43,6 +46,11 @@ criterion = "0.8.2"
 [[bench]]
 name = "throughput"
 harness = false
+
+[[bench]]
+name = "backends"
+harness = false
+required-features = ["bench-internals"]
 
 [profile.release]
 lto = "thin"

@@ -47,6 +47,59 @@ digest::buffer_fixed!(
 /// A raw 128-bit MD5 digest.
 pub type Md5Digest = [u8; 16];
 
+#[cfg(feature = "bench-internals")]
+#[doc(hidden)]
+pub mod bench_internals {
+    //! Unstable backend hooks for this crate's own microbenchmarks.
+
+    use super::Md5Digest;
+
+    /// Hash through the pre-specialization generic one-shot framing path.
+    #[must_use]
+    pub fn md5_generic(input: &[u8]) -> Md5Digest {
+        crate::scalar::hash_generic(input)
+    }
+
+    /// Hash a <=55-byte message through the one-block framing candidate.
+    #[must_use]
+    pub fn md5_short_one_block(input: &[u8]) -> Md5Digest {
+        crate::scalar::hash_short_one_block(input)
+    }
+
+    /// Hash a non-empty block-aligned message through the compact final-block candidate.
+    #[must_use]
+    pub fn md5_aligned(input: &[u8]) -> Md5Digest {
+        crate::scalar::hash_aligned(input)
+    }
+
+    /// Whether the x86-64 AVX-512VL single-stream backend can execute.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn x86_avx512_supported() -> bool {
+        crate::scalar_x86_64_avx512::is_supported()
+    }
+
+    /// Force the x86-64 NoLEA scalar single-stream backend.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn md5_x86_nolea(input: &[u8]) -> Md5Digest {
+        crate::scalar::hash_x86_nolea(input)
+    }
+
+    /// Force the x86-64 AVX-512VL single-stream backend.
+    ///
+    /// # Panics
+    ///
+    /// Panics when AVX-512F or AVX-512VL is unavailable.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn md5_x86_avx512(input: &[u8]) -> Md5Digest {
+        assert!(x86_avx512_supported());
+        // SAFETY: the assertion above checks both required target features.
+        unsafe { crate::scalar_x86_64_avx512::hash(input) }
+    }
+}
+
 pub use incremental::Md5State;
 
 /// Compute the MD5 digest of a single byte slice.

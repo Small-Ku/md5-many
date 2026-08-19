@@ -185,6 +185,10 @@ pub(crate) fn hash(input: &[u8]) -> [u8; 16] {
         return unsafe { crate::scalar_x86_64_avx512::hash(input) };
     }
 
+    hash_generic(input)
+}
+
+pub(crate) fn hash_generic(input: &[u8]) -> [u8; 16] {
     let mut state = STATE_INIT;
     let mut chunks = input.chunks_exact(64);
 
@@ -211,6 +215,67 @@ pub(crate) fn hash(input: &[u8]) -> [u8; 16] {
         compress_block(&mut state, block);
     }
 
+    state_to_bytes(state)
+}
+
+#[cfg(feature = "bench-internals")]
+#[inline]
+pub(crate) fn hash_short_one_block(input: &[u8]) -> [u8; 16] {
+    assert!(input.len() <= 55);
+
+    let mut state = STATE_INIT;
+    let mut block = [0u8; 64];
+    block[..input.len()].copy_from_slice(input);
+    block[input.len()] = 0x80;
+    block[56..64].copy_from_slice(&(input.len() as u64).wrapping_mul(8).to_le_bytes());
+    compress_block(&mut state, &block);
+    state_to_bytes(state)
+}
+
+#[cfg(feature = "bench-internals")]
+pub(crate) fn hash_aligned(input: &[u8]) -> [u8; 16] {
+    assert!(!input.is_empty() && input.len().is_multiple_of(64));
+
+    let mut state = STATE_INIT;
+    for chunk in input.chunks_exact(64) {
+        let block: &[u8; 64] = chunk.try_into().expect("64-byte chunk");
+        compress_block(&mut state, block);
+    }
+
+    let mut final_block = [0u8; 64];
+    final_block[0] = 0x80;
+    final_block[56..64].copy_from_slice(&(input.len() as u64).wrapping_mul(8).to_le_bytes());
+    compress_block(&mut state, &final_block);
+    state_to_bytes(state)
+}
+
+#[cfg(all(feature = "bench-internals", target_arch = "x86_64"))]
+pub(crate) fn hash_x86_nolea(input: &[u8]) -> [u8; 16] {
+    let mut state = STATE_INIT;
+    let mut chunks = input.chunks_exact(64);
+
+    for chunk in &mut chunks {
+        let block: &[u8; 64] = chunk.try_into().expect("64-byte chunk");
+        crate::scalar_x86_64::compress_block(&mut state, block);
+    }
+
+    let tail = chunks.remainder();
+    let mut final_blocks = [[0u8; 64]; 2];
+    final_blocks[0][..tail.len()].copy_from_slice(tail);
+    final_blocks[0][tail.len()] = 0x80;
+
+    let bit_len = (input.len() as u64).wrapping_mul(8).to_le_bytes();
+    let used = if tail.len() <= 55 {
+        final_blocks[0][56..64].copy_from_slice(&bit_len);
+        1
+    } else {
+        final_blocks[1][56..64].copy_from_slice(&bit_len);
+        2
+    };
+
+    for block in &final_blocks[..used] {
+        crate::scalar_x86_64::compress_block(&mut state, block);
+    }
     state_to_bytes(state)
 }
 
