@@ -325,12 +325,14 @@ unproductive rewrites without new evidence.
   gains for 15–31 B inputs but regressions for 1–14 B and code-layout-sensitive
   movement in unrelated cases. It was rejected rather than duplicating a large
   64-round kernel for a fragile small win.
-- Incremental 256-byte per-stream staging reduced SIMD kernel entry frequency
-  for tiny lockstep chunks, but a prototype only improved 32-byte updates by
-  about 11% and 64-byte updates by about 13%, while expanding `Md5State` from
-  roughly 96 bytes to roughly 288 bytes and regressing some 128-byte/1 KiB
-  cases by about 4–5%. The memory/API trade-off was rejected; the state keeps a
-  single 64-byte partial block.
+- Incremental per-stream staging larger than one 64-byte block was rechecked
+  after the AVX-512 stateful kernel and lockstep scheduler landed. A 256-byte
+  buffer could improve the 16-byte-chunk case by roughly 10% on the measured
+  EPYC 9V74, but 32/64-byte and 4 KiB updates showed no stable corresponding
+  gain, while `Md5State` would grow from roughly 96 bytes to roughly 288 bytes.
+  128-byte and 512-byte staging did not establish a better crossover either.
+  The memory/API trade-off remains rejected; the public state keeps a single
+  64-byte partial block.
 
 ## CI performance guard
 
