@@ -192,6 +192,37 @@ inside one AVX2 kernel boundary and use the same direct load/transpose schedule
 as the one-shot path. Do not regress this path back to per-word generic lane
 gathers.
 
+### Incremental sixteen-stream AVX-512 on AMD EPYC 9V74
+
+A later run on a benchmark host reporting AMD EPYC 9V74 (family 25/model 17) exposed the
+same missing specialization at the 16-lane width. Before a stateful AVX-512
+kernel, full 16-stream updates still used the generic per-word SIMD gather
+path even though one-shot hashing already had a direct 16x64-byte transpose
+kernel.
+
+With 16 streams of 64 KiB each, the pre-specialization means were about
+1.638 GiB/s for 32-byte updates and 3.311 GiB/s for 4 KiB updates. Adding the
+stateful AVX-512 kernel and a lockstep equal-chunk fast path produced these
+same-host Criterion means:
+
+| Workload | Final incremental | Same-host one-shot | One-shot share |
+| --- | ---: | ---: | ---: |
+| 32-byte updates | **2.944 GiB/s** | 6.875 GiB/s | 42.8% |
+| 64-byte updates | **3.959 GiB/s** | 6.875 GiB/s | 57.6% |
+| 4 KiB updates | **6.753 GiB/s** | 6.875 GiB/s | 98.2% |
+
+Relative to the generic 16-lane stateful path, 32-byte updates improved by
+about **80%** and 4 KiB updates by about **104%**. The lockstep fast path alone
+also moved the measured 64-byte case from roughly 3.10 GiB/s to roughly
+4.0 GiB/s by avoiding repeated compaction and selected-lane bookkeeping.
+
+**Implementation consequence:** a fully occupied AVX-512 incremental group
+must use the direct 16x64-byte transpose/round kernel. Equal-length lockstep
+updates should bypass the mixed-stream compaction scheduler. Small updates
+still pay a kernel-boundary/state-materialization cost on every completed
+block, so their remaining gap should not be treated as an MD5 round-kernel
+problem. The reported CPU model is an observation of this host, not a runner or platform contract.
+
 ## Low-occupancy AMD family 19h scheduling
 
 Sparse SIMD is not always the best way to hash two or three independent
@@ -294,6 +325,12 @@ unproductive rewrites without new evidence.
   gains for 15–31 B inputs but regressions for 1–14 B and code-layout-sensitive
   movement in unrelated cases. It was rejected rather than duplicating a large
   64-round kernel for a fragile small win.
+- Incremental 256-byte per-stream staging reduced SIMD kernel entry frequency
+  for tiny lockstep chunks, but a prototype only improved 32-byte updates by
+  about 11% and 64-byte updates by about 13%, while expanding `Md5State` from
+  roughly 96 bytes to roughly 288 bytes and regressing some 128-byte/1 KiB
+  cases by about 4–5%. The memory/API trade-off was rejected; the state keeps a
+  single 64-byte partial block.
 
 ## CI performance guard
 
