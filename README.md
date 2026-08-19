@@ -34,7 +34,7 @@ Other `fearless_simd` targets retain the portable multi-buffer implementation, i
 
 ```toml
 [dependencies]
-md5-many = "0.1.0-alpha.3"
+md5-many = "0.1.0-alpha.4"
 ```
 
 ### Single message
@@ -90,7 +90,7 @@ engine.finalize_many(&states, &mut outputs);
 
 `update_many` accepts a different chunk length for every stream. Partial 64-byte blocks stay buffered in each `Md5State`; complete blocks are compacted into the available SIMD lanes. `finalize_many` does not consume or reset the states, so it can be used as a checkpoint before more data is appended. `Md5State::update` and `Md5State::finalize` are also available for one incremental stream.
 
-The incremental path currently batches stateful compression at the backend's native SIMD lane width. The wider x86 dual/triple whole-stream interleaving used by `hash_many` remains specific to the one-shot path, so incremental peak-throughput tuning is separate from the initial stateful API.
+On x86, block-aligned incremental updates use the same native, dual-chain, and triple-chain SIMD widths as the one-shot scheduler when enough streams are available: SSE2-class 4/8/12-way groups, AVX2 8/16/24-way groups, and AVX-512 16/32/48-way groups. Mixed or partial updates retain the general compaction path, so callers do not need to keep every stream in lockstep.
 
 ### RustCrypto `digest` compatibility
 
@@ -117,7 +117,7 @@ let result = hasher.finalize();
 
 ```toml
 [dependencies]
-md5-many = { version = "0.1.0-alpha.3", default-features = false, features = ["libm", "digest"] }
+md5-many = { version = "0.1.0-alpha.4", default-features = false, features = ["libm", "digest"] }
 ```
 
 Or omit `digest` if the block-trait adapter is not needed.

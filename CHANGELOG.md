@@ -4,6 +4,17 @@ All notable changes to `md5-many` will be documented in this file.
 
 ## Unreleased
 
+## 0.1.0-alpha.4 - 2026-08-19
+
+Incremental multi-stream hashing and stateful SIMD saturation across the x86 backends.
+
+- Add `Md5State` plus `Md5Many::update_many` / `finalize_many` for allocation-free incremental hashing of independent streams with arbitrary per-stream chunk sizes, buffered partial blocks, non-destructive checkpoint finalization, and continued updates after a checkpoint.
+- Add stateful SSE2, AVX2, and AVX-512 compression paths. Block-aligned lockstep workloads can interleave one, two, or three native SIMD groups (4/8/12 SSE-class, 8/16/24 AVX2, and 16/32/48 AVX-512 streams) instead of serializing native groups.
+- Reduce incremental state-management overhead with direct `Md5State` compression, register AoS-to-SoA state transposes, lockstep fast paths, and derivation of the partial-block length from the total byte count rather than storing redundant state.
+- Extend Criterion coverage for incremental chunk sizes and forced x86 lockstep group widths, and record same-host saturation measurements and rejected staging/gather experiments in `docs/performance.md`.
+- Add regression coverage for padding boundaries, uneven chunking, checkpoint-and-continue behavior, AVX-512 stateful compression, and transitions from lockstep to mixed updates.
+- Gate the AVX-512 incremental regression test and its x86-only helper correctly so native AArch64 CI builds and tests remain clean.
+
 ## 0.1.0-alpha.3 - 2026-08-17
 
 Post-alpha.2 performance validation and CI hardening, including an independently confirmed Intel single-stream improvement.
