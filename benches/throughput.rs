@@ -20,6 +20,26 @@ fn bench_single(c: &mut Criterion) {
     group.finish();
 }
 
+fn bench_short_one_shot(c: &mut Criterion) {
+    let data = vec![0x5au8; 512];
+    let mut group = c.benchmark_group("short-one-shot");
+    group.sample_size(40);
+
+    for &len in &[
+        0usize, 1, 7, 15, 31, 47, 55, 56, 57, 63, 64, 65, 119, 120, 127, 128, 191, 255, 256, 512,
+    ] {
+        let input = &data[..len];
+        group.throughput(Throughput::Bytes(len as u64));
+        group.bench_with_input(BenchmarkId::new("md5-many", len), &len, |b, _| {
+            b.iter(|| black_box(md5(black_box(input))))
+        });
+        group.bench_with_input(BenchmarkId::new("rustcrypto-md5", len), &len, |b, _| {
+            b.iter(|| black_box(RustCryptoMd5::digest(black_box(input))))
+        });
+    }
+    group.finish();
+}
+
 fn bench_many(c: &mut Criterion) {
     let engine = Md5Many::new();
     let lanes = engine.lanes();
@@ -467,6 +487,7 @@ fn bench_x86_small_skew_tails(_c: &mut Criterion) {}
 criterion_group!(
     benches,
     bench_single,
+    bench_short_one_shot,
     bench_many,
     bench_incremental_many,
     bench_x86_incremental_lockstep,
