@@ -180,15 +180,21 @@ pub(crate) fn compress_blocks(state: &mut [u32; 4], blocks: &[[u8; 64]]) {
 
 pub(crate) fn hash(input: &[u8]) -> [u8; 16] {
     #[cfg(target_arch = "x86_64")]
-    if crate::scalar_x86_64_avx512::is_preferred() {
-        // SAFETY: runtime feature detection above verifies AVX-512F + AVX-512VL.
-        return unsafe { crate::scalar_x86_64_avx512::hash(input) };
+    {
+        if crate::scalar_x86_64_avx512::is_preferred() {
+            // SAFETY: runtime feature detection above verifies AVX-512F + AVX-512VL.
+            return unsafe { crate::scalar_x86_64_avx512::hash(input) };
+        }
+        hash_x86_nolea(input)
     }
 
-    if input.len() <= 55 {
-        hash_short_one_block(input)
-    } else {
-        hash_generic(input)
+    #[cfg(not(target_arch = "x86_64"))]
+    {
+        if input.len() <= 55 {
+            hash_short_one_block(input)
+        } else {
+            hash_generic(input)
+        }
     }
 }
 
@@ -300,8 +306,18 @@ pub(crate) fn hash_aligned(input: &[u8]) -> [u8; 16] {
     state_to_bytes(state)
 }
 
-#[cfg(all(feature = "bench-internals", target_arch = "x86_64"))]
+#[cfg(target_arch = "x86_64")]
 pub(crate) fn hash_x86_nolea(input: &[u8]) -> [u8; 16] {
+    if input.len() <= 55 {
+        let mut state = STATE_INIT;
+        let mut block = [0u8; 64];
+        block[..input.len()].copy_from_slice(input);
+        block[input.len()] = 0x80;
+        block[56..64].copy_from_slice(&(input.len() as u64).wrapping_mul(8).to_le_bytes());
+        crate::scalar_x86_64::compress_block(&mut state, &block);
+        return state_to_bytes(state);
+    }
+
     let mut state = STATE_INIT;
     let mut chunks = input.chunks_exact(64);
 
