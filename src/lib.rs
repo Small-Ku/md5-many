@@ -29,7 +29,11 @@ mod scalar_x86_64_avx512;
 #[cfg(target_arch = "x86_64")]
 mod scalar_x86_64_dual;
 mod simd;
-#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+#[cfg(all(
+    feature = "bench-internals",
+    target_arch = "aarch64",
+    target_endian = "little"
+))]
 mod simd_aarch64;
 
 #[cfg(feature = "digest")]
