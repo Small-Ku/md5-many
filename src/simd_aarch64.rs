@@ -1,7 +1,7 @@
 use core::arch::aarch64::{
     uint32x4_t, vaddq_u32, vbslq_u32, vcombine_u32, vdupq_n_u32, veorq_u32, vget_high_u32,
-    vget_low_u32, vld1q_u8, vornq_u32, vorrq_u32, vreinterpretq_u32_u8, vshlq_n_u32, vshrq_n_u32,
-    vst1q_u32, vtrn1q_u32, vtrn2q_u32,
+    vget_low_u32, vld1q_u8, vornq_u32, vorrq_u32, vreinterpretq_u8_u32, vreinterpretq_u32_u8,
+    vshlq_n_u32, vshrq_n_u32, vst1q_u8, vtrn1q_u32, vtrn2q_u32,
 };
 
 use crate::consts::{K, STATE_INIT};
@@ -193,19 +193,21 @@ pub(crate) fn hash_equal_len4(inputs: [&[u8]; 4]) -> [[u8; 16]; 4] {
         compress_words(&mut state, &words);
     }
 
-    let mut lanes = [[0u32; 4]; 4];
-    for word in 0..4 {
-        // SAFETY: each destination has space for the four u32 lanes.
-        unsafe { vst1q_u32(lanes[word].as_mut_ptr(), state[word]) };
+    // Transpose the SoA state back to one `[A, B, C, D]` vector per
+    // message. This module only exists on little-endian AArch64, so storing
+    // each u32 vector as bytes directly produces MD5's little-endian digest.
+    let digest_rows = transpose4(state);
+    let mut outputs = [[0u8; 16]; 4];
+    for lane in 0..4 {
+        // SAFETY: each output has exactly 16 writable bytes.
+        unsafe {
+            vst1q_u8(
+                outputs[lane].as_mut_ptr(),
+                vreinterpretq_u8_u32(digest_rows[lane]),
+            )
+        };
     }
-
-    core::array::from_fn(|lane| {
-        let mut out = [0u8; 16];
-        for word in 0..4 {
-            out[word * 4..word * 4 + 4].copy_from_slice(&lanes[word][lane].to_le_bytes());
-        }
-        out
-    })
+    outputs
 }
 
 #[cfg(test)]
