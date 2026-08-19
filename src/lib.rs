@@ -105,6 +105,20 @@ pub mod bench_internals {
         crate::simd_aarch64::hash_equal_len4(inputs)
     }
 
+    /// Force the native eight-way AArch64 NEON round-interleaved candidate.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[must_use]
+    pub fn md5_aarch64_neon8(inputs: [&[u8]; 8]) -> [Md5Digest; 8] {
+        crate::simd_aarch64::hash_equal_len8(inputs)
+    }
+
+    /// Force the native twelve-way AArch64 NEON round-interleaved candidate.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[must_use]
+    pub fn md5_aarch64_neon12(inputs: [&[u8]; 12]) -> [Md5Digest; 12] {
+        crate::simd_aarch64::hash_equal_len12(inputs)
+    }
+
     /// Hash a non-empty block-aligned message through the compact final-block candidate.
     #[must_use]
     pub fn md5_aligned(input: &[u8]) -> Md5Digest {

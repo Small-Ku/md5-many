@@ -245,7 +245,7 @@ fn bench_aarch64_neon4(_c: &mut Criterion) {}
 
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 fn bench_aarch64_neon_occupancy(c: &mut Criterion) {
-    use md5_many::bench_internals::md5_aarch64_neon4;
+    use md5_many::bench_internals::{md5_aarch64_neon4, md5_aarch64_neon8, md5_aarch64_neon12};
 
     let engine = md5_many::Md5Many::new();
     for &lanes in &[4usize, 8, 12] {
@@ -282,6 +282,21 @@ fn bench_aarch64_neon_occupancy(c: &mut Criterion) {
                     black_box(&native_outputs)
                 })
             });
+            match lanes {
+                8 => {
+                    let eight: [&[u8]; 8] = inputs.as_slice().try_into().expect("eight inputs");
+                    group.bench_function("native-neon8-interleaved", |b| {
+                        b.iter(|| black_box(md5_aarch64_neon8(black_box(eight))))
+                    });
+                }
+                12 => {
+                    let twelve: [&[u8]; 12] = inputs.as_slice().try_into().expect("twelve inputs");
+                    group.bench_function("native-neon12-interleaved", |b| {
+                        b.iter(|| black_box(md5_aarch64_neon12(black_box(twelve))))
+                    });
+                }
+                _ => {}
+            }
             group.finish();
         }
     }

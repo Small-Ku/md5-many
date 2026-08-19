@@ -37,9 +37,15 @@ fn load_words(blocks: [&[u8; 64]; 4]) -> [uint32x4_t; 16] {
 }
 
 #[inline(always)]
-fn compress_words(state: &mut [uint32x4_t; 4], words: &[uint32x4_t; 16]) {
-    let [mut a, mut b, mut c, mut d] = *state;
-    let initial = *state;
+fn compress_words_interleaved<const GROUPS: usize>(
+    states: &mut [[uint32x4_t; 4]; GROUPS],
+    words: &[[uint32x4_t; 16]; GROUPS],
+) {
+    let initial = *states;
+    let mut a = core::array::from_fn(|group| states[group][0]);
+    let mut b = core::array::from_fn(|group| states[group][1]);
+    let mut c = core::array::from_fn(|group| states[group][2]);
+    let mut d = core::array::from_fn(|group| states[group][3]);
 
     macro_rules! mix {
         (f, $x:expr, $y:expr, $z:expr) => {
@@ -57,15 +63,17 @@ fn compress_words(state: &mut [uint32x4_t; 4], words: &[uint32x4_t; 16]) {
     }
     macro_rules! step {
         ($which:ident, $a:ident, $b:ident, $c:ident, $d:ident, $word:expr, $round:expr, $shift:literal) => {{
-            let mixed = mix!($which, $b, $c, $d);
-            let mut value = vaddq_u32($a, mixed);
-            value = vaddq_u32(value, vdupq_n_u32(K[$round]));
-            value = vaddq_u32(value, words[$word]);
-            let rotated = vorrq_u32(
-                vshlq_n_u32::<$shift>(value),
-                vshrq_n_u32::<{ 32 - $shift }>(value),
-            );
-            $a = vaddq_u32($b, rotated);
+            for group in 0..GROUPS {
+                let mixed = mix!($which, $b[group], $c[group], $d[group]);
+                let mut value = vaddq_u32($a[group], mixed);
+                value = vaddq_u32(value, vdupq_n_u32(K[$round]));
+                value = vaddq_u32(value, words[group][$word]);
+                let rotated = vorrq_u32(
+                    vshlq_n_u32::<$shift>(value),
+                    vshrq_n_u32::<{ 32 - $shift }>(value),
+                );
+                $a[group] = vaddq_u32($b[group], rotated);
+            }
         }};
     }
 
@@ -134,12 +142,13 @@ fn compress_words(state: &mut [uint32x4_t; 4], words: &[uint32x4_t; 16]) {
     step!(i, c, d, a, b, 2, 62, 15);
     step!(i, b, c, d, a, 9, 63, 21);
 
-    state[0] = vaddq_u32(initial[0], a);
-    state[1] = vaddq_u32(initial[1], b);
-    state[2] = vaddq_u32(initial[2], c);
-    state[3] = vaddq_u32(initial[3], d);
+    for group in 0..GROUPS {
+        states[group][0] = vaddq_u32(initial[group][0], a[group]);
+        states[group][1] = vaddq_u32(initial[group][1], b[group]);
+        states[group][2] = vaddq_u32(initial[group][2], c[group]);
+        states[group][3] = vaddq_u32(initial[group][3], d[group]);
+    }
 }
-
 #[inline(always)]
 fn padded_blocks_for_len(len: usize) -> usize {
     len / 64 + if (len & 63) <= 55 { 1 } else { 2 }
@@ -162,69 +171,126 @@ fn build_padded_block(input: &[u8], padded_blocks: usize, block_index: usize) ->
     block
 }
 
+/// Hash one or more four-message groups with a native AArch64 NEON kernel.
+///
+/// Each group occupies the four u32 lanes of one NEON vector. For two or
+/// three groups the MD5 rounds are issued group-by-group before advancing to
+/// the next round, exposing independent dependency chains to the core while
+/// keeping every message inside the same 4-lane transpose/load machinery.
+fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
+    inputs: [&[u8]; LANES],
+) -> [[u8; 16]; LANES] {
+    assert_eq!(LANES, GROUPS * 4);
+    let len = inputs[0].len();
+    assert!(inputs.iter().all(|input| input.len() == len));
+
+    let initial_state = STATE_INIT.map(vdupq_n_u32);
+    let mut states: [[uint32x4_t; 4]; GROUPS] = core::array::from_fn(|_| initial_state);
+    let full_blocks = len / 64;
+    for block_index in 0..full_blocks {
+        let offset = block_index * 64;
+        let words: [[uint32x4_t; 16]; GROUPS] = core::array::from_fn(|group| {
+            let blocks: [&[u8; 64]; 4] = core::array::from_fn(|lane| {
+                let input = inputs[group * 4 + lane];
+                input[offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            load_words(blocks)
+        });
+        compress_words_interleaved(&mut states, &words);
+    }
+
+    let padded_blocks = padded_blocks_for_len(len);
+    for block_index in full_blocks..padded_blocks {
+        let padded: [[[u8; 64]; 4]; GROUPS] = core::array::from_fn(|group| {
+            core::array::from_fn(|lane| {
+                build_padded_block(inputs[group * 4 + lane], padded_blocks, block_index)
+            })
+        });
+        let words: [[uint32x4_t; 16]; GROUPS] = core::array::from_fn(|group| {
+            let blocks: [&[u8; 64]; 4] = core::array::from_fn(|lane| &padded[group][lane]);
+            load_words(blocks)
+        });
+        compress_words_interleaved(&mut states, &words);
+    }
+
+    // Transpose each group's SoA state back to one `[A, B, C, D]` vector
+    // per message. This module only exists on little-endian AArch64, so a
+    // direct vector store already has MD5's required byte order.
+    let mut outputs = [[0u8; 16]; LANES];
+    for group in 0..GROUPS {
+        let digest_rows = transpose4(states[group]);
+        for lane in 0..4 {
+            // SAFETY: each output has exactly 16 writable bytes.
+            unsafe {
+                vst1q_u8(
+                    outputs[group * 4 + lane].as_mut_ptr(),
+                    vreinterpretq_u8_u32(digest_rows[lane]),
+                )
+            };
+        }
+    }
+    outputs
+}
+
 /// Hash four equal-length messages with a native AArch64 NEON kernel.
 ///
 /// This remains an experimental backend until hardware benchmarks establish
 /// its crossover against the generic Fearless SIMD NEON path.
 pub(crate) fn hash_equal_len4(inputs: [&[u8]; 4]) -> [[u8; 16]; 4] {
-    let len = inputs[0].len();
-    assert!(inputs.iter().all(|input| input.len() == len));
+    hash_equal_len_groups::<1, 4>(inputs)
+}
 
-    let mut state = STATE_INIT.map(vdupq_n_u32);
-    let full_blocks = len / 64;
-    for block_index in 0..full_blocks {
-        let offset = block_index * 64;
-        let blocks: [&[u8; 64]; 4] = core::array::from_fn(|lane| {
-            inputs[lane][offset..offset + 64]
-                .try_into()
-                .expect("full MD5 block")
-        });
-        let words = load_words(blocks);
-        compress_words(&mut state, &words);
-    }
+/// Hash eight equal-length messages as two round-interleaved NEON groups.
+pub(crate) fn hash_equal_len8(inputs: [&[u8]; 8]) -> [[u8; 16]; 8] {
+    hash_equal_len_groups::<2, 8>(inputs)
+}
 
-    let padded_blocks = padded_blocks_for_len(len);
-    for block_index in full_blocks..padded_blocks {
-        let padded: [[u8; 64]; 4] = core::array::from_fn(|lane| {
-            build_padded_block(inputs[lane], padded_blocks, block_index)
-        });
-        let blocks: [&[u8; 64]; 4] = core::array::from_fn(|lane| &padded[lane]);
-        let words = load_words(blocks);
-        compress_words(&mut state, &words);
-    }
-
-    // Transpose the SoA state back to one `[A, B, C, D]` vector per
-    // message. This module only exists on little-endian AArch64, so storing
-    // each u32 vector as bytes directly produces MD5's little-endian digest.
-    let digest_rows = transpose4(state);
-    let mut outputs = [[0u8; 16]; 4];
-    for lane in 0..4 {
-        // SAFETY: each output has exactly 16 writable bytes.
-        unsafe {
-            vst1q_u8(
-                outputs[lane].as_mut_ptr(),
-                vreinterpretq_u8_u32(digest_rows[lane]),
-            )
-        };
-    }
-    outputs
+/// Hash twelve equal-length messages as three round-interleaved NEON groups.
+pub(crate) fn hash_equal_len12(inputs: [&[u8]; 12]) -> [[u8; 16]; 12] {
+    hash_equal_len_groups::<3, 12>(inputs)
 }
 
 #[cfg(test)]
 mod tests {
-    use super::hash_equal_len4;
+    use super::{hash_equal_len4, hash_equal_len8, hash_equal_len12};
+
+    fn make_data<const LANES: usize>(len: usize) -> [std::vec::Vec<u8>; LANES] {
+        core::array::from_fn(|lane| {
+            (0..len)
+                .map(|index| (index as u8).wrapping_mul(17).wrapping_add(lane as u8 * 19))
+                .collect()
+        })
+    }
+
+    fn expected<const LANES: usize>(data: &[std::vec::Vec<u8>; LANES]) -> [[u8; 16]; LANES] {
+        data.each_ref().map(|input| crate::scalar::hash(input))
+    }
 
     #[test]
     fn native_neon_equal_len_matches_scalar() {
         for &len in &[0usize, 1, 55, 56, 63, 64, 65, 119, 120, 128, 1024, 4096] {
-            let data: [std::vec::Vec<u8>; 4] = core::array::from_fn(|lane| {
-                (0..len)
-                    .map(|index| (index as u8).wrapping_mul(17).wrapping_add(lane as u8 * 29))
-                    .collect()
-            });
-            let refs = data.each_ref().map(|input| crate::scalar::hash(input));
-            let got = hash_equal_len4(data.each_ref().map(|input| input.as_slice()));
-            assert_eq!(got, refs, "len={len}");
+            let data4 = make_data::<4>(len);
+            assert_eq!(
+                hash_equal_len4(data4.each_ref().map(|input| input.as_slice())),
+                expected(&data4),
+                "4-way len={len}"
+            );
+
+            let data8 = make_data::<8>(len);
+            assert_eq!(
+                hash_equal_len8(data8.each_ref().map(|input| input.as_slice())),
+                expected(&data8),
+                "8-way len={len}"
+            );
+
+            let data12 = make_data::<12>(len);
+            assert_eq!(
+                hash_equal_len12(data12.each_ref().map(|input| input.as_slice())),
+                expected(&data12),
+                "12-way len={len}"
+            );
         }
     }
 }
