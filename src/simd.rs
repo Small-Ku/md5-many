@@ -9680,6 +9680,7 @@ pub(crate) fn compress_many_blocks_with_level(
     dispatch!(level, simd => compress_many_blocks_inner(simd, states, inputs));
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline(always)]
 fn compress_md5_states_inner<SIMD: Simd>(simd: SIMD, streams: &mut [Md5State], inputs: &[&[u8]]) {
     debug_assert_eq!(streams.len(), inputs.len());

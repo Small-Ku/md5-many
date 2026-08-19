@@ -702,7 +702,7 @@ mod tests {
         }
     }
 
-    #[cfg(feature = "std")]
+    #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
     #[test]
     fn incremental_avx512_stateful_kernel_matches_reference() {
         let detected = fearless_simd::Level::new();
