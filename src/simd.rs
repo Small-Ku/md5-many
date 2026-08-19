@@ -438,6 +438,228 @@ fearless_simd::kernel!(
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fearless_simd::kernel!(
     #[inline]
+    fn compress_equal_len_avx2_state_kernel(avx2: Avx2, states: &mut [[u32; 4]], inputs: &[&[u8]]) {
+        debug_assert_eq!(states.len(), 8);
+        debug_assert_eq!(inputs.len(), 8);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        debug_assert!(inputs[0].len().is_multiple_of(64));
+        let _ = avx2;
+
+        macro_rules! transpose8 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let t0 = _mm256_unpacklo_epi32(rows[0], rows[1]);
+                let t1 = _mm256_unpackhi_epi32(rows[0], rows[1]);
+                let t2 = _mm256_unpacklo_epi32(rows[2], rows[3]);
+                let t3 = _mm256_unpackhi_epi32(rows[2], rows[3]);
+                let t4 = _mm256_unpacklo_epi32(rows[4], rows[5]);
+                let t5 = _mm256_unpackhi_epi32(rows[4], rows[5]);
+                let t6 = _mm256_unpacklo_epi32(rows[6], rows[7]);
+                let t7 = _mm256_unpackhi_epi32(rows[6], rows[7]);
+
+                let u0 = _mm256_unpacklo_epi64(t0, t2);
+                let u1 = _mm256_unpackhi_epi64(t0, t2);
+                let u2 = _mm256_unpacklo_epi64(t1, t3);
+                let u3 = _mm256_unpackhi_epi64(t1, t3);
+                let u4 = _mm256_unpacklo_epi64(t4, t6);
+                let u5 = _mm256_unpackhi_epi64(t4, t6);
+                let u6 = _mm256_unpacklo_epi64(t5, t7);
+                let u7 = _mm256_unpackhi_epi64(t5, t7);
+
+                [
+                    _mm256_permute2x128_si256::<0x20>(u0, u4),
+                    _mm256_permute2x128_si256::<0x20>(u1, u5),
+                    _mm256_permute2x128_si256::<0x20>(u2, u6),
+                    _mm256_permute2x128_si256::<0x20>(u3, u7),
+                    _mm256_permute2x128_si256::<0x31>(u0, u4),
+                    _mm256_permute2x128_si256::<0x31>(u1, u5),
+                    _mm256_permute2x128_si256::<0x31>(u2, u6),
+                    _mm256_permute2x128_si256::<0x31>(u3, u7),
+                ]
+            }};
+        }
+
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut lo = [_mm256_setzero_si256(); 8];
+                let mut hi = lo;
+                for lane in 0..8 {
+                    let ptr = blocks[lane].as_ptr();
+                    // SAFETY: every entry is a 64-byte block, and unaligned AVX2
+                    // loads read exactly bytes 0..32 and 32..64 respectively.
+                    lo[lane] = unsafe { _mm256_loadu_si256(ptr.cast::<__m256i>()) };
+                    // SAFETY: bytes 32..64 are inside the same 64-byte block.
+                    hi[lane] = unsafe { _mm256_loadu_si256(ptr.add(32).cast::<__m256i>()) };
+                }
+                let lo = transpose8!(lo);
+                let hi = transpose8!(hi);
+                [
+                    lo[0], lo[1], lo[2], lo[3], lo[4], lo[5], lo[6], lo[7], hi[0], hi[1], hi[2],
+                    hi[3], hi[4], hi[5], hi[6], hi[7],
+                ]
+            }};
+        }
+
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $y), _mm256_andnot_si256($x, $z))
+            };
+            (g, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $z), _mm256_andnot_si256($z, $y))
+            };
+            (h, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256(_mm256_xor_si256($x, $y), $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256($y, _mm256_or_si256($x, _mm256_xor_si256($z, $ones)))
+            };
+        }
+
+        macro_rules! step {
+            (g, $a:ident, $b:ident, $c:ident, $d:ident, $words:ident, $ones:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mut t = _mm256_add_epi32($a, _mm256_andnot_si256($d, $c));
+                t = _mm256_add_epi32(t, _mm256_set1_epi32(K[$round] as i32));
+                t = _mm256_add_epi32(t, $words[$word]);
+                t = _mm256_add_epi32(t, _mm256_and_si256($d, $b));
+                let rotated = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t),
+                );
+                $a = _mm256_add_epi32($b, rotated);
+            }};
+            ($which:ident, $a:ident, $b:ident, $c:ident, $d:ident, $words:ident, $ones:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mut t = _mm256_add_epi32($a, mix!($which, $b, $c, $d, $ones));
+                t = _mm256_add_epi32(t, _mm256_set1_epi32(K[$round] as i32));
+                t = _mm256_add_epi32(t, $words[$word]);
+                let rotated = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t),
+                );
+                $a = _mm256_add_epi32($b, rotated);
+            }};
+        }
+
+        macro_rules! compress {
+            ($word_expr:expr, $a:ident, $b:ident, $c:ident, $d:ident, $ones:ident) => {{
+                let words = $word_expr;
+                let initial = [$a, $b, $c, $d];
+                step!(f, $a, $b, $c, $d, words, $ones, 0, 0, 7);
+                step!(f, $d, $a, $b, $c, words, $ones, 1, 1, 12);
+                step!(f, $c, $d, $a, $b, words, $ones, 2, 2, 17);
+                step!(f, $b, $c, $d, $a, words, $ones, 3, 3, 22);
+                step!(f, $a, $b, $c, $d, words, $ones, 4, 4, 7);
+                step!(f, $d, $a, $b, $c, words, $ones, 5, 5, 12);
+                step!(f, $c, $d, $a, $b, words, $ones, 6, 6, 17);
+                step!(f, $b, $c, $d, $a, words, $ones, 7, 7, 22);
+                step!(f, $a, $b, $c, $d, words, $ones, 8, 8, 7);
+                step!(f, $d, $a, $b, $c, words, $ones, 9, 9, 12);
+                step!(f, $c, $d, $a, $b, words, $ones, 10, 10, 17);
+                step!(f, $b, $c, $d, $a, words, $ones, 11, 11, 22);
+                step!(f, $a, $b, $c, $d, words, $ones, 12, 12, 7);
+                step!(f, $d, $a, $b, $c, words, $ones, 13, 13, 12);
+                step!(f, $c, $d, $a, $b, words, $ones, 14, 14, 17);
+                step!(f, $b, $c, $d, $a, words, $ones, 15, 15, 22);
+                step!(g, $a, $b, $c, $d, words, $ones, 1, 16, 5);
+                step!(g, $d, $a, $b, $c, words, $ones, 6, 17, 9);
+                step!(g, $c, $d, $a, $b, words, $ones, 11, 18, 14);
+                step!(g, $b, $c, $d, $a, words, $ones, 0, 19, 20);
+                step!(g, $a, $b, $c, $d, words, $ones, 5, 20, 5);
+                step!(g, $d, $a, $b, $c, words, $ones, 10, 21, 9);
+                step!(g, $c, $d, $a, $b, words, $ones, 15, 22, 14);
+                step!(g, $b, $c, $d, $a, words, $ones, 4, 23, 20);
+                step!(g, $a, $b, $c, $d, words, $ones, 9, 24, 5);
+                step!(g, $d, $a, $b, $c, words, $ones, 14, 25, 9);
+                step!(g, $c, $d, $a, $b, words, $ones, 3, 26, 14);
+                step!(g, $b, $c, $d, $a, words, $ones, 8, 27, 20);
+                step!(g, $a, $b, $c, $d, words, $ones, 13, 28, 5);
+                step!(g, $d, $a, $b, $c, words, $ones, 2, 29, 9);
+                step!(g, $c, $d, $a, $b, words, $ones, 7, 30, 14);
+                step!(g, $b, $c, $d, $a, words, $ones, 12, 31, 20);
+                step!(h, $a, $b, $c, $d, words, $ones, 5, 32, 4);
+                step!(h, $d, $a, $b, $c, words, $ones, 8, 33, 11);
+                step!(h, $c, $d, $a, $b, words, $ones, 11, 34, 16);
+                step!(h, $b, $c, $d, $a, words, $ones, 14, 35, 23);
+                step!(h, $a, $b, $c, $d, words, $ones, 1, 36, 4);
+                step!(h, $d, $a, $b, $c, words, $ones, 4, 37, 11);
+                step!(h, $c, $d, $a, $b, words, $ones, 7, 38, 16);
+                step!(h, $b, $c, $d, $a, words, $ones, 10, 39, 23);
+                step!(h, $a, $b, $c, $d, words, $ones, 13, 40, 4);
+                step!(h, $d, $a, $b, $c, words, $ones, 0, 41, 11);
+                step!(h, $c, $d, $a, $b, words, $ones, 3, 42, 16);
+                step!(h, $b, $c, $d, $a, words, $ones, 6, 43, 23);
+                step!(h, $a, $b, $c, $d, words, $ones, 9, 44, 4);
+                step!(h, $d, $a, $b, $c, words, $ones, 12, 45, 11);
+                step!(h, $c, $d, $a, $b, words, $ones, 15, 46, 16);
+                step!(h, $b, $c, $d, $a, words, $ones, 2, 47, 23);
+                step!(i, $a, $b, $c, $d, words, $ones, 0, 48, 6);
+                step!(i, $d, $a, $b, $c, words, $ones, 7, 49, 10);
+                step!(i, $c, $d, $a, $b, words, $ones, 14, 50, 15);
+                step!(i, $b, $c, $d, $a, words, $ones, 5, 51, 21);
+                step!(i, $a, $b, $c, $d, words, $ones, 12, 52, 6);
+                step!(i, $d, $a, $b, $c, words, $ones, 3, 53, 10);
+                step!(i, $c, $d, $a, $b, words, $ones, 10, 54, 15);
+                step!(i, $b, $c, $d, $a, words, $ones, 1, 55, 21);
+                step!(i, $a, $b, $c, $d, words, $ones, 8, 56, 6);
+                step!(i, $d, $a, $b, $c, words, $ones, 15, 57, 10);
+                step!(i, $c, $d, $a, $b, words, $ones, 6, 58, 15);
+                step!(i, $b, $c, $d, $a, words, $ones, 13, 59, 21);
+                step!(i, $a, $b, $c, $d, words, $ones, 4, 60, 6);
+                step!(i, $d, $a, $b, $c, words, $ones, 11, 61, 10);
+                step!(i, $c, $d, $a, $b, words, $ones, 2, 62, 15);
+                step!(i, $b, $c, $d, $a, words, $ones, 9, 63, 21);
+                $a = _mm256_add_epi32(initial[0], $a);
+                $b = _mm256_add_epi32(initial[1], $b);
+                $c = _mm256_add_epi32(initial[2], $c);
+                $d = _mm256_add_epi32(initial[3], $d);
+            }};
+        }
+
+        let mut lane_words = [[0u32; 8]; 4];
+        for word in 0..4 {
+            for lane in 0..8 {
+                lane_words[word][lane] = states[lane][word];
+            }
+        }
+        // SAFETY: each lane_words row is exactly eight u32 values (32 bytes).
+        let mut a = unsafe { _mm256_loadu_si256(lane_words[0].as_ptr().cast::<__m256i>()) };
+        let mut b = unsafe { _mm256_loadu_si256(lane_words[1].as_ptr().cast::<__m256i>()) };
+        let mut c = unsafe { _mm256_loadu_si256(lane_words[2].as_ptr().cast::<__m256i>()) };
+        let mut d = unsafe { _mm256_loadu_si256(lane_words[3].as_ptr().cast::<__m256i>()) };
+        let all_ones = _mm256_set1_epi32(-1);
+
+        let block_count = inputs[0].len() / 64;
+        for block_index in 0..block_count {
+            let offset = block_index * 64;
+            let blocks: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words = load_transposed!(blocks);
+            compress!(words, a, b, c, d, all_ones);
+        }
+
+        let vector_state = [a, b, c, d];
+        for word in 0..4 {
+            // SAFETY: each destination is exactly eight u32 values (32 bytes).
+            unsafe {
+                _mm256_storeu_si256(
+                    lane_words[word].as_mut_ptr().cast::<__m256i>(),
+                    vector_state[word],
+                );
+            }
+        }
+        for lane in 0..8 {
+            for word in 0..4 {
+                states[lane][word] = lane_words[word][lane];
+            }
+        }
+    }
+);
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
     fn hash_mixed_len_avx2_kernel(avx2: Avx2, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
         debug_assert_eq!(inputs.len(), 8);
         debug_assert_eq!(outputs.len(), 8);
@@ -5064,15 +5286,13 @@ fn full_block_words<SIMD: Simd>(
 }
 
 #[inline(always)]
-fn compress_many_blocks_inner<SIMD: Simd>(
-    simd: SIMD,
-    states: &mut [[u32; 4]],
-    inputs: &[&[u8]],
-) {
+fn compress_many_blocks_inner<SIMD: Simd>(simd: SIMD, states: &mut [[u32; 4]], inputs: &[&[u8]]) {
     debug_assert_eq!(states.len(), inputs.len());
-    debug_assert!(inputs
-        .first()
-        .is_none_or(|first| inputs.iter().all(|input| input.len() == first.len())));
+    debug_assert!(
+        inputs
+            .first()
+            .is_none_or(|first| inputs.iter().all(|input| input.len() == first.len()))
+    );
     debug_assert!(inputs.first().is_none_or(|input| input.len() % 64 == 0));
 
     let lanes = SIMD::u32s::N;
@@ -5136,7 +5356,10 @@ pub(crate) fn compress_many_blocks_with_level(
         return;
     }
     let len = inputs[0].len();
-    assert!(len % 64 == 0, "incremental SIMD input must be block aligned");
+    assert!(
+        len.is_multiple_of(64),
+        "incremental SIMD input must be block aligned"
+    );
     assert!(
         inputs.iter().all(|input| input.len() == len),
         "incremental SIMD inputs must have equal lengths"
@@ -5148,17 +5371,23 @@ pub(crate) fn compress_many_blocks_with_level(
     // AVX-512 lanes, for example.
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        if states.len() <= 4 {
-            if let Some(sse2) = level.as_sse2() {
-                compress_many_blocks_inner(sse2, states, inputs);
-                return;
-            }
+        if states.len() <= 4
+            && let Some(sse2) = level.as_sse2()
+        {
+            compress_many_blocks_inner(sse2, states, inputs);
+            return;
         }
-        if states.len() <= 8 {
-            if let Some(avx2) = level.as_avx2() {
-                compress_many_blocks_inner(avx2, states, inputs);
-                return;
-            }
+        if states.len() == 8
+            && let Some(avx2) = level.as_avx2()
+        {
+            compress_equal_len_avx2_state_kernel(avx2, states, inputs);
+            return;
+        }
+        if states.len() <= 8
+            && let Some(avx2) = level.as_avx2()
+        {
+            compress_many_blocks_inner(avx2, states, inputs);
+            return;
         }
     }
 

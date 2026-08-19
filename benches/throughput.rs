@@ -75,9 +75,8 @@ fn bench_incremental_many(c: &mut Criterion) {
             })
             .collect();
 
-        let mut group = c.benchmark_group(format!(
-            "incremental-{lanes}x64KiB-{chunk_size}B-chunks"
-        ));
+        let mut group =
+            c.benchmark_group(format!("incremental-{lanes}x64KiB-{chunk_size}B-chunks"));
         group.throughput(Throughput::Bytes((lanes * size) as u64));
         group.bench_function("md5-many", |b| {
             b.iter(|| {

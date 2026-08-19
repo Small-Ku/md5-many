@@ -648,9 +648,8 @@ mod tests {
     #[test]
     fn incremental_many_partial_block_completion_matches_reference() {
         let engine = Md5Many::new();
-        let storage: [[u8; 129]; 16] = core::array::from_fn(|lane| {
-            core::array::from_fn(|i| (lane * 23 + i * 41) as u8)
-        });
+        let storage: [[u8; 129]; 16] =
+            core::array::from_fn(|lane| core::array::from_fn(|i| (lane * 23 + i * 41) as u8));
         let mut states = [Md5State::new(); 16];
 
         let first: [&[u8]; 16] = core::array::from_fn(|lane| &storage[lane][..31]);

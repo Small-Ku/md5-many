@@ -164,9 +164,7 @@ pub(crate) fn update_many_with_level(level: Level, streams: &mut [Md5State], inp
         // those completed blocks together so 32+32-byte (etc.) streaming can
         // still use multi-buffer SIMD rather than degenerating to scalar MD5.
         for lane in 0..count {
-            streams[lane].bytes = streams[lane]
-                .bytes
-                .wrapping_add(inputs[lane].len() as u64);
+            streams[lane].bytes = streams[lane].bytes.wrapping_add(inputs[lane].len() as u64);
             if streams[lane].buffer_len == 0 {
                 continue;
             }
@@ -186,8 +184,8 @@ pub(crate) fn update_many_with_level(level: Level, streams: &mut [Md5State], inp
 
         let mut selected = [0usize; MAX_LANES];
         let mut selected_count = 0;
-        for lane in 0..count {
-            if ready[lane] {
+        for (lane, is_ready) in ready[..count].iter().copied().enumerate() {
+            if is_ready {
                 selected[selected_count] = lane;
                 selected_count += 1;
             }
