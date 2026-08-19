@@ -66,7 +66,7 @@ fn bench_incremental_many(c: &mut Criterion) {
     let mut states = vec![Md5State::new(); lanes];
     let mut outputs = vec![[0u8; 16]; lanes];
 
-    for &chunk_size in &[32usize, 4 * 1024] {
+    for &chunk_size in &[16usize, 32, 48, 64, 128, 256, 1024, 4 * 1024] {
         let chunks: Vec<Vec<&[u8]>> = (0..size)
             .step_by(chunk_size)
             .map(|start| {
