@@ -74,9 +74,7 @@ impl Md5Many {
     #[cfg(any(feature = "std", target_arch = "wasm32"))]
     #[must_use]
     pub fn new() -> Self {
-        Self {
-            level: fearless_simd::Level::new(),
-        }
+        Self::from_level(fearless_simd::Level::new())
     }
 
     /// Construct a batch engine from an already-detected Fearless SIMD level.
@@ -89,7 +87,7 @@ impl Md5Many {
     ///
     /// AVX-512 is 16 lanes, AVX2 is 8 lanes, and SSE4.2/NEON/WASM use 4 lanes.
     #[must_use]
-    pub fn lanes(self) -> usize {
+    pub const fn lanes(self) -> usize {
         simd::lanes_with_level(self.level)
     }
 
@@ -726,6 +724,56 @@ mod tests {
         engine.finalize_many(&states, &mut outputs);
         for lane in 0..16 {
             assert_eq!(outputs[lane], reference(&storage[lane]), "lane={lane}");
+        }
+    }
+
+    #[cfg(all(feature = "std", any(target_arch = "x86", target_arch = "x86_64")))]
+    #[test]
+    fn incremental_x86_interleaved_groups_match_reference() {
+        fn check(engine: Md5Many, count: usize) {
+            let storage: std::vec::Vec<std::vec::Vec<u8>> = (0..count)
+                .map(|lane| (0..521).map(|i| (lane * 71 + i * 23 + 5) as u8).collect())
+                .collect();
+            let mut states = std::vec![Md5State::new(); count];
+
+            // Three exactly block-aligned updates exercise the native/dual/
+            // triple stateful kernels directly. The remaining uneven chunks
+            // verify that the same states transition back through buffered
+            // incremental scheduling before interleaved finalization.
+            for (start, end) in [
+                (0, 64),
+                (64, 128),
+                (128, 192),
+                (192, 239),
+                (239, 320),
+                (320, 521),
+            ] {
+                let inputs: std::vec::Vec<&[u8]> =
+                    storage.iter().map(|message| &message[start..end]).collect();
+                engine.update_many(&mut states, &inputs);
+            }
+
+            let mut outputs = std::vec![[0u8; 16]; count];
+            engine.finalize_many(&states, &mut outputs);
+            for lane in 0..count {
+                assert_eq!(
+                    outputs[lane],
+                    reference(&storage[lane]),
+                    "count={count} lane={lane}"
+                );
+            }
+        }
+
+        let detected = fearless_simd::Level::new();
+        if let Some(avx2) = detected.as_avx2() {
+            let engine = Md5Many::from_level(fearless_simd::Level::Avx2(avx2));
+            check(engine, 16);
+            check(engine, 24);
+        }
+        if let Some(avx512) = detected.as_avx512() {
+            let engine = Md5Many::from_level(fearless_simd::Level::Avx512(avx512));
+            check(engine, 32);
+            check(engine, 48);
         }
     }
 

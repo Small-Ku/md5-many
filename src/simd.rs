@@ -2,28 +2,37 @@ use fearless_simd::{Level, Simd, SimdBase, dispatch};
 
 #[cfg(target_arch = "x86")]
 use core::arch::x86::{
-    __cpuid, __cpuid_count, __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256,
-    _mm256_andnot_si256, _mm256_loadu_si256, _mm256_or_si256, _mm256_permute2x128_si256,
-    _mm256_set1_epi32, _mm256_setzero_si256, _mm256_slli_epi32, _mm256_srli_epi32,
-    _mm256_storeu_si256, _mm256_unpackhi_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi32,
-    _mm256_unpacklo_epi64, _mm256_xor_si256, _mm512_add_epi32, _mm512_loadu_si512,
-    _mm512_permutex2var_epi32, _mm512_rol_epi32, _mm512_set1_epi32, _mm512_setr_epi32,
-    _mm512_setzero_si512, _mm512_storeu_si512, _mm512_ternarylogic_epi32,
+    __cpuid, __cpuid_count, __m128i, __m256i, __m512i, _mm_loadu_si128, _mm_storeu_si128,
+    _mm_unpackhi_epi32, _mm_unpackhi_epi64, _mm_unpacklo_epi32, _mm_unpacklo_epi64,
+    _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256, _mm256_castsi128_si256,
+    _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_inserti128_si256, _mm256_loadu_si256,
+    _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32, _mm256_setzero_si256,
+    _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256, _mm256_unpackhi_epi32,
+    _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64, _mm256_xor_si256,
+    _mm512_add_epi32, _mm512_castsi128_si512, _mm512_castsi512_si128, _mm512_extracti32x4_epi32,
+    _mm512_inserti32x4, _mm512_loadu_si512, _mm512_permutex2var_epi32, _mm512_rol_epi32,
+    _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512, _mm512_storeu_si512,
+    _mm512_ternarylogic_epi32,
 };
 #[cfg(target_arch = "x86_64")]
 use core::arch::x86_64::{
-    __cpuid, __cpuid_count, __m256i, __m512i, _mm256_add_epi32, _mm256_and_si256,
-    _mm256_andnot_si256, _mm256_loadu_si256, _mm256_or_si256, _mm256_permute2x128_si256,
-    _mm256_set1_epi32, _mm256_setzero_si256, _mm256_slli_epi32, _mm256_srli_epi32,
-    _mm256_storeu_si256, _mm256_unpackhi_epi32, _mm256_unpackhi_epi64, _mm256_unpacklo_epi32,
-    _mm256_unpacklo_epi64, _mm256_xor_si256, _mm512_add_epi32, _mm512_loadu_si512,
-    _mm512_permutex2var_epi32, _mm512_rol_epi32, _mm512_set1_epi32, _mm512_setr_epi32,
-    _mm512_setzero_si512, _mm512_storeu_si512, _mm512_ternarylogic_epi32,
+    __cpuid, __cpuid_count, __m128i, __m256i, __m512i, _mm_loadu_si128, _mm_storeu_si128,
+    _mm_unpackhi_epi32, _mm_unpackhi_epi64, _mm_unpacklo_epi32, _mm_unpacklo_epi64,
+    _mm256_add_epi32, _mm256_and_si256, _mm256_andnot_si256, _mm256_castsi128_si256,
+    _mm256_castsi256_si128, _mm256_extracti128_si256, _mm256_inserti128_si256, _mm256_loadu_si256,
+    _mm256_or_si256, _mm256_permute2x128_si256, _mm256_set1_epi32, _mm256_setzero_si256,
+    _mm256_slli_epi32, _mm256_srli_epi32, _mm256_storeu_si256, _mm256_unpackhi_epi32,
+    _mm256_unpackhi_epi64, _mm256_unpacklo_epi32, _mm256_unpacklo_epi64, _mm256_xor_si256,
+    _mm512_add_epi32, _mm512_castsi128_si512, _mm512_castsi512_si128, _mm512_extracti32x4_epi32,
+    _mm512_inserti32x4, _mm512_loadu_si512, _mm512_permutex2var_epi32, _mm512_rol_epi32,
+    _mm512_set1_epi32, _mm512_setr_epi32, _mm512_setzero_si512, _mm512_storeu_si512,
+    _mm512_ternarylogic_epi32,
 };
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 use fearless_simd::{Avx2, Avx512};
 
 use crate::consts::{K, S, STATE_INIT};
+use crate::incremental::Md5State;
 use crate::scalar;
 
 /// Maximum lane count supported by the current implementation.
@@ -5576,6 +5585,4022 @@ fn compress_many_blocks_inner<SIMD: Simd>(simd: SIMD, states: &mut [[u32; 4]], i
     }
 }
 
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx2_dual_state_kernel(
+        avx2: Avx2,
+        states: &mut [[u32; 4]],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(inputs.len(), 16);
+        debug_assert_eq!(states.len(), 16);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        let _ = avx2;
+
+        macro_rules! transpose8 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let t0 = _mm256_unpacklo_epi32(rows[0], rows[1]);
+                let t1 = _mm256_unpackhi_epi32(rows[0], rows[1]);
+                let t2 = _mm256_unpacklo_epi32(rows[2], rows[3]);
+                let t3 = _mm256_unpackhi_epi32(rows[2], rows[3]);
+                let t4 = _mm256_unpacklo_epi32(rows[4], rows[5]);
+                let t5 = _mm256_unpackhi_epi32(rows[4], rows[5]);
+                let t6 = _mm256_unpacklo_epi32(rows[6], rows[7]);
+                let t7 = _mm256_unpackhi_epi32(rows[6], rows[7]);
+
+                let u0 = _mm256_unpacklo_epi64(t0, t2);
+                let u1 = _mm256_unpackhi_epi64(t0, t2);
+                let u2 = _mm256_unpacklo_epi64(t1, t3);
+                let u3 = _mm256_unpackhi_epi64(t1, t3);
+                let u4 = _mm256_unpacklo_epi64(t4, t6);
+                let u5 = _mm256_unpackhi_epi64(t4, t6);
+                let u6 = _mm256_unpacklo_epi64(t5, t7);
+                let u7 = _mm256_unpackhi_epi64(t5, t7);
+
+                [
+                    _mm256_permute2x128_si256::<0x20>(u0, u4),
+                    _mm256_permute2x128_si256::<0x20>(u1, u5),
+                    _mm256_permute2x128_si256::<0x20>(u2, u6),
+                    _mm256_permute2x128_si256::<0x20>(u3, u7),
+                    _mm256_permute2x128_si256::<0x31>(u0, u4),
+                    _mm256_permute2x128_si256::<0x31>(u1, u5),
+                    _mm256_permute2x128_si256::<0x31>(u2, u6),
+                    _mm256_permute2x128_si256::<0x31>(u3, u7),
+                ]
+            }};
+        }
+
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut lo = [_mm256_setzero_si256(); 8];
+                let mut hi = lo;
+                for lane in 0..8 {
+                    let ptr = blocks[lane].as_ptr();
+                    // SAFETY: every entry is a 64-byte block, and unaligned AVX2
+                    // loads read exactly bytes 0..32 and 32..64 respectively.
+                    lo[lane] = unsafe { _mm256_loadu_si256(ptr.cast::<__m256i>()) };
+                    // SAFETY: bytes 32..64 are inside the same 64-byte block.
+                    hi[lane] = unsafe { _mm256_loadu_si256(ptr.add(32).cast::<__m256i>()) };
+                }
+                let lo = transpose8!(lo);
+                let hi = transpose8!(hi);
+                [
+                    lo[0], lo[1], lo[2], lo[3], lo[4], lo[5], lo[6], lo[7], hi[0], hi[1], hi[2],
+                    hi[3], hi[4], hi[5], hi[6], hi[7],
+                ]
+            }};
+        }
+
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $y), _mm256_andnot_si256($x, $z))
+            };
+            (g, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $z), _mm256_andnot_si256($z, $y))
+            };
+            (h, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256(_mm256_xor_si256($x, $y), $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256($y, _mm256_or_si256($x, _mm256_xor_si256($z, $ones)))
+            };
+        }
+
+        macro_rules! step2 {
+            (g, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $a1:ident, $b1:ident, $c1:ident, $d1:ident, $words0:ident, $words1:ident, $ones:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mut t0 = _mm256_add_epi32($a0, _mm256_andnot_si256($d0, $c0));
+                let mut t1 = _mm256_add_epi32($a1, _mm256_andnot_si256($d1, $c1));
+                let key = _mm256_set1_epi32(K[$round] as i32);
+                t0 = _mm256_add_epi32(t0, key);
+                t1 = _mm256_add_epi32(t1, key);
+                t0 = _mm256_add_epi32(t0, $words0[$word]);
+                t1 = _mm256_add_epi32(t1, $words1[$word]);
+                t0 = _mm256_add_epi32(t0, _mm256_and_si256($d0, $b0));
+                t1 = _mm256_add_epi32(t1, _mm256_and_si256($d1, $b1));
+                let rotated0 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t0),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t0),
+                );
+                let rotated1 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t1),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t1),
+                );
+                $a0 = _mm256_add_epi32($b0, rotated0);
+                $a1 = _mm256_add_epi32($b1, rotated1);
+            }};
+            ($which:ident, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $a1:ident, $b1:ident, $c1:ident, $d1:ident, $words0:ident, $words1:ident, $ones:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mixed0 = mix!($which, $b0, $c0, $d0, $ones);
+                let mixed1 = mix!($which, $b1, $c1, $d1, $ones);
+                let mut t0 = _mm256_add_epi32($a0, mixed0);
+                let mut t1 = _mm256_add_epi32($a1, mixed1);
+                let key = _mm256_set1_epi32(K[$round] as i32);
+                t0 = _mm256_add_epi32(t0, key);
+                t1 = _mm256_add_epi32(t1, key);
+                t0 = _mm256_add_epi32(t0, $words0[$word]);
+                t1 = _mm256_add_epi32(t1, $words1[$word]);
+                let rotated0 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t0),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t0),
+                );
+                let rotated1 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t1),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t1),
+                );
+                $a0 = _mm256_add_epi32($b0, rotated0);
+                $a1 = _mm256_add_epi32($b1, rotated1);
+            }};
+        }
+
+        macro_rules! compress2 {
+            ($words0:expr, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $words1:expr, $a1:ident, $b1:ident, $c1:ident, $d1:ident, $ones:ident) => {{
+                let words0 = $words0;
+                let words1 = $words1;
+                let initial0 = [$a0, $b0, $c0, $d0];
+                let initial1 = [$a1, $b1, $c1, $d1];
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 0, 0, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 1, 1, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 2, 2, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 3, 3, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 4, 4, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 5, 5, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 6, 6, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 7, 7, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 8, 8, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 9, 9, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 10, 10, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 11, 11, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 12, 12, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 13, 13, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 14, 14, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 15, 15, 22
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 1, 16, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 6, 17, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 11, 18, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 0, 19, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 5, 20, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 10, 21, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 15, 22, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 4, 23, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 9, 24, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 14, 25, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 3, 26, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 8, 27, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 13, 28, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 2, 29, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 7, 30, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 12, 31, 20
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 5, 32, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 8, 33, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 11, 34, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 14, 35, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 1, 36, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 4, 37, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 7, 38, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 10, 39, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 13, 40, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 0, 41, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 3, 42, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 6, 43, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 9, 44, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 12, 45, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 15, 46, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 2, 47, 23
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 0, 48, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 7, 49, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 14, 50, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 5, 51, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 12, 52, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 3, 53, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 10, 54, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 1, 55, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 8, 56, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 15, 57, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 6, 58, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 13, 59, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 4, 60, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 11, 61, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 2, 62, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 9, 63, 21
+                );
+                $a0 = _mm256_add_epi32(initial0[0], $a0);
+                $b0 = _mm256_add_epi32(initial0[1], $b0);
+                $c0 = _mm256_add_epi32(initial0[2], $c0);
+                $d0 = _mm256_add_epi32(initial0[3], $d0);
+                $a1 = _mm256_add_epi32(initial1[0], $a1);
+                $b1 = _mm256_add_epi32(initial1[1], $b1);
+                $c1 = _mm256_add_epi32(initial1[2], $c1);
+                $d1 = _mm256_add_epi32(initial1[3], $d1);
+            }};
+        }
+
+        let len = inputs[0].len();
+        let mut lane_words0 = [[0u32; 8]; 4];
+        let mut lane_words1 = [[0u32; 8]; 4];
+        for word in 0..4 {
+            for lane in 0..8 {
+                lane_words0[word][lane] = states[lane][word];
+                lane_words1[word][lane] = states[lane + 8][word];
+            }
+        }
+        // SAFETY: lane_words0[0] exactly matches one native vector.
+        let mut a0 = unsafe { _mm256_loadu_si256(lane_words0[0].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words0[1] exactly matches one native vector.
+        let mut b0 = unsafe { _mm256_loadu_si256(lane_words0[1].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words0[2] exactly matches one native vector.
+        let mut c0 = unsafe { _mm256_loadu_si256(lane_words0[2].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words0[3] exactly matches one native vector.
+        let mut d0 = unsafe { _mm256_loadu_si256(lane_words0[3].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words1[0] exactly matches one native vector.
+        let mut a1 = unsafe { _mm256_loadu_si256(lane_words1[0].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words1[1] exactly matches one native vector.
+        let mut b1 = unsafe { _mm256_loadu_si256(lane_words1[1].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words1[2] exactly matches one native vector.
+        let mut c1 = unsafe { _mm256_loadu_si256(lane_words1[2].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words1[3] exactly matches one native vector.
+        let mut d1 = unsafe { _mm256_loadu_si256(lane_words1[3].as_ptr().cast::<__m256i>()) };
+        let all_ones = _mm256_set1_epi32(-1);
+        let full_blocks = len / 64;
+
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks0: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks1: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane + 8][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words0 = load_transposed!(blocks0);
+            let words1 = load_transposed!(blocks1);
+            compress2!(words0, a0, b0, c0, d0, words1, a1, b1, c1, d1, all_ones);
+        }
+
+        let states0 = [a0, b0, c0, d0];
+        let states1 = [a1, b1, c1, d1];
+        for word in 0..4 {
+            unsafe {
+                _mm256_storeu_si256(
+                    lane_words0[word].as_mut_ptr().cast::<__m256i>(),
+                    states0[word],
+                )
+            };
+        }
+        for word in 0..4 {
+            unsafe {
+                _mm256_storeu_si256(
+                    lane_words1[word].as_mut_ptr().cast::<__m256i>(),
+                    states1[word],
+                )
+            };
+        }
+        for lane in 0..8 {
+            for word in 0..4 {
+                states[lane][word] = lane_words0[word][lane];
+                states[lane + 8][word] = lane_words1[word][lane];
+            }
+        }
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx2_triple_state_kernel(
+        avx2: Avx2,
+        states: &mut [[u32; 4]],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(inputs.len(), 24);
+        debug_assert_eq!(states.len(), 24);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        let _ = avx2;
+
+        macro_rules! transpose8 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let t0 = _mm256_unpacklo_epi32(rows[0], rows[1]);
+                let t1 = _mm256_unpackhi_epi32(rows[0], rows[1]);
+                let t2 = _mm256_unpacklo_epi32(rows[2], rows[3]);
+                let t3 = _mm256_unpackhi_epi32(rows[2], rows[3]);
+                let t4 = _mm256_unpacklo_epi32(rows[4], rows[5]);
+                let t5 = _mm256_unpackhi_epi32(rows[4], rows[5]);
+                let t6 = _mm256_unpacklo_epi32(rows[6], rows[7]);
+                let t7 = _mm256_unpackhi_epi32(rows[6], rows[7]);
+                let u0 = _mm256_unpacklo_epi64(t0, t2);
+                let u1 = _mm256_unpackhi_epi64(t0, t2);
+                let u2 = _mm256_unpacklo_epi64(t1, t3);
+                let u3 = _mm256_unpackhi_epi64(t1, t3);
+                let u4 = _mm256_unpacklo_epi64(t4, t6);
+                let u5 = _mm256_unpackhi_epi64(t4, t6);
+                let u6 = _mm256_unpacklo_epi64(t5, t7);
+                let u7 = _mm256_unpackhi_epi64(t5, t7);
+                [
+                    _mm256_permute2x128_si256::<0x20>(u0, u4),
+                    _mm256_permute2x128_si256::<0x20>(u1, u5),
+                    _mm256_permute2x128_si256::<0x20>(u2, u6),
+                    _mm256_permute2x128_si256::<0x20>(u3, u7),
+                    _mm256_permute2x128_si256::<0x31>(u0, u4),
+                    _mm256_permute2x128_si256::<0x31>(u1, u5),
+                    _mm256_permute2x128_si256::<0x31>(u2, u6),
+                    _mm256_permute2x128_si256::<0x31>(u3, u7),
+                ]
+            }};
+        }
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut lo = [_mm256_setzero_si256(); 8];
+                let mut hi = lo;
+                for lane in 0..8 {
+                    let ptr = blocks[lane].as_ptr();
+                    lo[lane] = unsafe { _mm256_loadu_si256(ptr.cast::<__m256i>()) };
+                    hi[lane] = unsafe { _mm256_loadu_si256(ptr.add(32).cast::<__m256i>()) };
+                }
+                let lo = transpose8!(lo);
+                let hi = transpose8!(hi);
+                [
+                    lo[0], lo[1], lo[2], lo[3], lo[4], lo[5], lo[6], lo[7], hi[0], hi[1], hi[2],
+                    hi[3], hi[4], hi[5], hi[6], hi[7],
+                ]
+            }};
+        }
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $y), _mm256_andnot_si256($x, $z))
+            };
+            (h, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256(_mm256_xor_si256($x, $y), $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256($y, _mm256_or_si256($x, _mm256_xor_si256($z, $ones)))
+            };
+        }
+        macro_rules! step3 {
+            (g, $a0:ident,$b0:ident,$c0:ident,$d0:ident, $a1:ident,$b1:ident,$c1:ident,$d1:ident, $a2:ident,$b2:ident,$c2:ident,$d2:ident, $w0:ident,$w1:ident,$w2:ident,$ones:ident,$word:expr,$round:expr,$shift:literal) => {{
+                let key = _mm256_set1_epi32(K[$round] as i32);
+                let mut t0 = _mm256_add_epi32($a0, _mm256_andnot_si256($d0, $c0));
+                let mut t1 = _mm256_add_epi32($a1, _mm256_andnot_si256($d1, $c1));
+                let mut t2 = _mm256_add_epi32($a2, _mm256_andnot_si256($d2, $c2));
+                t0 = _mm256_add_epi32(_mm256_add_epi32(t0, key), $w0[$word]);
+                t1 = _mm256_add_epi32(_mm256_add_epi32(t1, key), $w1[$word]);
+                t2 = _mm256_add_epi32(_mm256_add_epi32(t2, key), $w2[$word]);
+                t0 = _mm256_add_epi32(t0, _mm256_and_si256($d0, $b0));
+                t1 = _mm256_add_epi32(t1, _mm256_and_si256($d1, $b1));
+                t2 = _mm256_add_epi32(t2, _mm256_and_si256($d2, $b2));
+                let r0 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t0),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t0),
+                );
+                let r1 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t1),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t1),
+                );
+                let r2 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t2),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t2),
+                );
+                $a0 = _mm256_add_epi32($b0, r0);
+                $a1 = _mm256_add_epi32($b1, r1);
+                $a2 = _mm256_add_epi32($b2, r2);
+            }};
+            ($which:ident, $a0:ident,$b0:ident,$c0:ident,$d0:ident, $a1:ident,$b1:ident,$c1:ident,$d1:ident, $a2:ident,$b2:ident,$c2:ident,$d2:ident, $w0:ident,$w1:ident,$w2:ident,$ones:ident,$word:expr,$round:expr,$shift:literal) => {{
+                let key = _mm256_set1_epi32(K[$round] as i32);
+                let mut t0 = _mm256_add_epi32($a0, mix!($which, $b0, $c0, $d0, $ones));
+                let mut t1 = _mm256_add_epi32($a1, mix!($which, $b1, $c1, $d1, $ones));
+                let mut t2 = _mm256_add_epi32($a2, mix!($which, $b2, $c2, $d2, $ones));
+                t0 = _mm256_add_epi32(_mm256_add_epi32(t0, key), $w0[$word]);
+                t1 = _mm256_add_epi32(_mm256_add_epi32(t1, key), $w1[$word]);
+                t2 = _mm256_add_epi32(_mm256_add_epi32(t2, key), $w2[$word]);
+                let r0 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t0),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t0),
+                );
+                let r1 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t1),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t1),
+                );
+                let r2 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t2),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t2),
+                );
+                $a0 = _mm256_add_epi32($b0, r0);
+                $a1 = _mm256_add_epi32($b1, r1);
+                $a2 = _mm256_add_epi32($b2, r2);
+            }};
+        }
+        macro_rules! compress3 {
+            ($words0:expr,$a0:ident,$b0:ident,$c0:ident,$d0:ident, $words1:expr,$a1:ident,$b1:ident,$c1:ident,$d1:ident, $words2:expr,$a2:ident,$b2:ident,$c2:ident,$d2:ident, $ones:ident) => {{
+                let words0 = $words0;
+                let words1 = $words1;
+                let words2 = $words2;
+                let initial0 = [$a0, $b0, $c0, $d0];
+                let initial1 = [$a1, $b1, $c1, $d1];
+                let initial2 = [$a2, $b2, $c2, $d2];
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 0, 0, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 1, 1, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 2, 2, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 3, 3, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 4, 4, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 5, 5, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 6, 6, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 7, 7, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 8, 8, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 9, 9, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 10, 10, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 11, 11, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 12, 12, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 13, 13, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 14, 14, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 15, 15, 22
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 1, 16, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 6, 17, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 11, 18, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 0, 19, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 5, 20, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 10, 21, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 15, 22, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 4, 23, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 9, 24, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 14, 25, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 3, 26, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 8, 27, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 13, 28, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 2, 29, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 7, 30, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 12, 31, 20
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 5, 32, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 8, 33, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 11, 34, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 14, 35, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 1, 36, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 4, 37, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 7, 38, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 10, 39, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 13, 40, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 0, 41, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 3, 42, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 6, 43, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 9, 44, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 12, 45, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 15, 46, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 2, 47, 23
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 0, 48, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 7, 49, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 14, 50, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 5, 51, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 12, 52, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 3, 53, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 10, 54, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 1, 55, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 8, 56, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 15, 57, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 6, 58, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 13, 59, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 4, 60, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 11, 61, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 2, 62, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 9, 63, 21
+                );
+                $a0 = _mm256_add_epi32(initial0[0], $a0);
+                $b0 = _mm256_add_epi32(initial0[1], $b0);
+                $c0 = _mm256_add_epi32(initial0[2], $c0);
+                $d0 = _mm256_add_epi32(initial0[3], $d0);
+                $a1 = _mm256_add_epi32(initial1[0], $a1);
+                $b1 = _mm256_add_epi32(initial1[1], $b1);
+                $c1 = _mm256_add_epi32(initial1[2], $c1);
+                $d1 = _mm256_add_epi32(initial1[3], $d1);
+                $a2 = _mm256_add_epi32(initial2[0], $a2);
+                $b2 = _mm256_add_epi32(initial2[1], $b2);
+                $c2 = _mm256_add_epi32(initial2[2], $c2);
+                $d2 = _mm256_add_epi32(initial2[3], $d2);
+            }};
+        }
+
+        let len = inputs[0].len();
+        let mut lane_words0 = [[0u32; 8]; 4];
+        let mut lane_words1 = [[0u32; 8]; 4];
+        let mut lane_words2 = [[0u32; 8]; 4];
+        for word in 0..4 {
+            for lane in 0..8 {
+                lane_words0[word][lane] = states[lane][word];
+                lane_words1[word][lane] = states[lane + 8][word];
+                lane_words2[word][lane] = states[lane + 16][word];
+            }
+        }
+        // SAFETY: lane_words0[0] exactly matches one native vector.
+        let mut a0 = unsafe { _mm256_loadu_si256(lane_words0[0].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words0[1] exactly matches one native vector.
+        let mut b0 = unsafe { _mm256_loadu_si256(lane_words0[1].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words0[2] exactly matches one native vector.
+        let mut c0 = unsafe { _mm256_loadu_si256(lane_words0[2].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words0[3] exactly matches one native vector.
+        let mut d0 = unsafe { _mm256_loadu_si256(lane_words0[3].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words1[0] exactly matches one native vector.
+        let mut a1 = unsafe { _mm256_loadu_si256(lane_words1[0].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words1[1] exactly matches one native vector.
+        let mut b1 = unsafe { _mm256_loadu_si256(lane_words1[1].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words1[2] exactly matches one native vector.
+        let mut c1 = unsafe { _mm256_loadu_si256(lane_words1[2].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words1[3] exactly matches one native vector.
+        let mut d1 = unsafe { _mm256_loadu_si256(lane_words1[3].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words2[0] exactly matches one native vector.
+        let mut a2 = unsafe { _mm256_loadu_si256(lane_words2[0].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words2[1] exactly matches one native vector.
+        let mut b2 = unsafe { _mm256_loadu_si256(lane_words2[1].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words2[2] exactly matches one native vector.
+        let mut c2 = unsafe { _mm256_loadu_si256(lane_words2[2].as_ptr().cast::<__m256i>()) };
+        // SAFETY: lane_words2[3] exactly matches one native vector.
+        let mut d2 = unsafe { _mm256_loadu_si256(lane_words2[3].as_ptr().cast::<__m256i>()) };
+        let all_ones = _mm256_set1_epi32(-1);
+        let full_blocks = len / 64;
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks0: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks1: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane + 8][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks2: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane + 16][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words0 = load_transposed!(blocks0);
+            let words1 = load_transposed!(blocks1);
+            let words2 = load_transposed!(blocks2);
+            compress3!(
+                words0, a0, b0, c0, d0, words1, a1, b1, c1, d1, words2, a2, b2, c2, d2, all_ones
+            );
+        }
+        let states0 = [a0, b0, c0, d0];
+        let states1 = [a1, b1, c1, d1];
+        let states2 = [a2, b2, c2, d2];
+        for word in 0..4 {
+            unsafe {
+                _mm256_storeu_si256(
+                    lane_words0[word].as_mut_ptr().cast::<__m256i>(),
+                    states0[word],
+                )
+            };
+        }
+        for word in 0..4 {
+            unsafe {
+                _mm256_storeu_si256(
+                    lane_words1[word].as_mut_ptr().cast::<__m256i>(),
+                    states1[word],
+                )
+            };
+        }
+        for word in 0..4 {
+            unsafe {
+                _mm256_storeu_si256(
+                    lane_words2[word].as_mut_ptr().cast::<__m256i>(),
+                    states2[word],
+                )
+            };
+        }
+        for lane in 0..8 {
+            for word in 0..4 {
+                states[lane][word] = lane_words0[word][lane];
+                states[lane + 8][word] = lane_words1[word][lane];
+                states[lane + 16][word] = lane_words2[word][lane];
+            }
+        }
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx512_dual_state_kernel(
+        avx512: Avx512,
+        states: &mut [[u32; 4]],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(inputs.len(), 32);
+        debug_assert_eq!(states.len(), 32);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+        macro_rules! transpose16 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let pair_lo =
+                    _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+                let pair_hi =
+                    _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+                let quad_lo =
+                    _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
+                let quad_hi =
+                    _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+                let oct_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+                let oct_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+                let half_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+                let half_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+
+                let mut s1 = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    let a = rows[pair * 2];
+                    let b = rows[pair * 2 + 1];
+                    s1[pair * 2] = _mm512_permutex2var_epi32(a, pair_lo, b);
+                    s1[pair * 2 + 1] = _mm512_permutex2var_epi32(a, pair_hi, b);
+                }
+
+                let mut s2 = [_mm512_setzero_si512(); 16];
+                for group in 0..4 {
+                    let base = group * 4;
+                    s2[base] = _mm512_permutex2var_epi32(s1[base], quad_lo, s1[base + 2]);
+                    s2[base + 1] = _mm512_permutex2var_epi32(s1[base], quad_hi, s1[base + 2]);
+                    s2[base + 2] = _mm512_permutex2var_epi32(s1[base + 1], quad_lo, s1[base + 3]);
+                    s2[base + 3] = _mm512_permutex2var_epi32(s1[base + 1], quad_hi, s1[base + 3]);
+                }
+
+                let mut s3 = [_mm512_setzero_si512(); 16];
+                for half in 0..2 {
+                    let left = half * 8;
+                    let right = left + 4;
+                    for quarter in 0..4 {
+                        s3[left + quarter * 2] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_lo,
+                            s2[right + quarter],
+                        );
+                        s3[left + quarter * 2 + 1] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_hi,
+                            s2[right + quarter],
+                        );
+                    }
+                }
+
+                let mut out = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    out[pair * 2] = _mm512_permutex2var_epi32(s3[pair], half_lo, s3[8 + pair]);
+                    out[pair * 2 + 1] = _mm512_permutex2var_epi32(s3[pair], half_hi, s3[8 + pair]);
+                }
+                out
+            }};
+        }
+
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut rows = [_mm512_setzero_si512(); 16];
+                for lane in 0..16 {
+                    // SAFETY: each entry is a full 64-byte MD5 block and the
+                    // unaligned AVX-512 load reads exactly those 64 bytes.
+                    rows[lane] = unsafe { _mm512_loadu_si512(blocks[lane].as_ptr().cast()) };
+                }
+                transpose16!(rows)
+            }};
+        }
+
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0xca>($x, $y, $z)
+            };
+            (g, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0xe4>($x, $y, $z)
+            };
+            (h, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0x96>($x, $y, $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0x39>($x, $y, $z)
+            };
+        }
+
+        macro_rules! step2 {
+            ($which:ident, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $a1:ident, $b1:ident, $c1:ident, $d1:ident, $words0:ident, $words1:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mixed0 = mix!($which, $b0, $c0, $d0);
+                let mixed1 = mix!($which, $b1, $c1, $d1);
+                let mut t0 = _mm512_add_epi32($a0, mixed0);
+                let mut t1 = _mm512_add_epi32($a1, mixed1);
+                let key = _mm512_set1_epi32(K[$round] as i32);
+                t0 = _mm512_add_epi32(t0, key);
+                t1 = _mm512_add_epi32(t1, key);
+                t0 = _mm512_add_epi32(t0, $words0[$word]);
+                t1 = _mm512_add_epi32(t1, $words1[$word]);
+                $a0 = _mm512_add_epi32($b0, _mm512_rol_epi32::<$shift>(t0));
+                $a1 = _mm512_add_epi32($b1, _mm512_rol_epi32::<$shift>(t1));
+            }};
+        }
+
+        macro_rules! compress2 {
+            ($words0:expr, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $words1:expr, $a1:ident, $b1:ident, $c1:ident, $d1:ident) => {{
+                let words0 = $words0;
+                let words1 = $words1;
+                let initial0 = [$a0, $b0, $c0, $d0];
+                let initial1 = [$a1, $b1, $c1, $d1];
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 0, 0, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 1, 1, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 2, 2, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 3, 3, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 4, 4, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 5, 5, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 6, 6, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 7, 7, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 8, 8, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 9, 9, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 10, 10, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 11, 11, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 12, 12, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 13, 13, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 14, 14, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 15, 15, 22
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 1, 16, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 6, 17, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 11, 18, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 0, 19, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 5, 20, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 10, 21, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 15, 22, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 4, 23, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 9, 24, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 14, 25, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 3, 26, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 8, 27, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 13, 28, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 2, 29, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 7, 30, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 12, 31, 20
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 5, 32, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 8, 33, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 11, 34, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 14, 35, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 1, 36, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 4, 37, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 7, 38, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 10, 39, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 13, 40, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 0, 41, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 3, 42, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 6, 43, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 9, 44, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 12, 45, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 15, 46, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 2, 47, 23
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 0, 48, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 7, 49, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 14, 50, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 5, 51, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 12, 52, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 3, 53, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 10, 54, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 1, 55, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 8, 56, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 15, 57, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 6, 58, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 13, 59, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 4, 60, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 11, 61, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 2, 62, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 9, 63, 21
+                );
+                $a0 = _mm512_add_epi32(initial0[0], $a0);
+                $b0 = _mm512_add_epi32(initial0[1], $b0);
+                $c0 = _mm512_add_epi32(initial0[2], $c0);
+                $d0 = _mm512_add_epi32(initial0[3], $d0);
+                $a1 = _mm512_add_epi32(initial1[0], $a1);
+                $b1 = _mm512_add_epi32(initial1[1], $b1);
+                $c1 = _mm512_add_epi32(initial1[2], $c1);
+                $d1 = _mm512_add_epi32(initial1[3], $d1);
+            }};
+        }
+
+        let len = inputs[0].len();
+        let mut lane_words0 = [[0u32; 16]; 4];
+        let mut lane_words1 = [[0u32; 16]; 4];
+        for word in 0..4 {
+            for lane in 0..16 {
+                lane_words0[word][lane] = states[lane][word];
+                lane_words1[word][lane] = states[lane + 16][word];
+            }
+        }
+        // SAFETY: lane_words0[0] exactly matches one native vector.
+        let mut a0 = unsafe { _mm512_loadu_si512(lane_words0[0].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words0[1] exactly matches one native vector.
+        let mut b0 = unsafe { _mm512_loadu_si512(lane_words0[1].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words0[2] exactly matches one native vector.
+        let mut c0 = unsafe { _mm512_loadu_si512(lane_words0[2].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words0[3] exactly matches one native vector.
+        let mut d0 = unsafe { _mm512_loadu_si512(lane_words0[3].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words1[0] exactly matches one native vector.
+        let mut a1 = unsafe { _mm512_loadu_si512(lane_words1[0].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words1[1] exactly matches one native vector.
+        let mut b1 = unsafe { _mm512_loadu_si512(lane_words1[1].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words1[2] exactly matches one native vector.
+        let mut c1 = unsafe { _mm512_loadu_si512(lane_words1[2].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words1[3] exactly matches one native vector.
+        let mut d1 = unsafe { _mm512_loadu_si512(lane_words1[3].as_ptr().cast::<__m512i>()) };
+        let full_blocks = len / 64;
+
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks0: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks1: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane + 16][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words0 = load_transposed!(blocks0);
+            let words1 = load_transposed!(blocks1);
+            compress2!(words0, a0, b0, c0, d0, words1, a1, b1, c1, d1);
+        }
+
+        let states0 = [a0, b0, c0, d0];
+        let states1 = [a1, b1, c1, d1];
+        for word in 0..4 {
+            unsafe {
+                _mm512_storeu_si512(
+                    lane_words0[word].as_mut_ptr().cast::<__m512i>(),
+                    states0[word],
+                )
+            };
+        }
+        for word in 0..4 {
+            unsafe {
+                _mm512_storeu_si512(
+                    lane_words1[word].as_mut_ptr().cast::<__m512i>(),
+                    states1[word],
+                )
+            };
+        }
+        for lane in 0..16 {
+            for word in 0..4 {
+                states[lane][word] = lane_words0[word][lane];
+                states[lane + 16][word] = lane_words1[word][lane];
+            }
+        }
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx512_triple_state_kernel(
+        avx512: Avx512,
+        states: &mut [[u32; 4]],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(inputs.len(), 48);
+        debug_assert_eq!(states.len(), 48);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        let _ = avx512;
+
+        macro_rules! transpose16 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let pair_lo =
+                    _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+                let pair_hi =
+                    _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+                let quad_lo =
+                    _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
+                let quad_hi =
+                    _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+                let oct_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+                let oct_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+                let half_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+                let half_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+                let mut s1 = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    let a = rows[pair * 2];
+                    let b = rows[pair * 2 + 1];
+                    s1[pair * 2] = _mm512_permutex2var_epi32(a, pair_lo, b);
+                    s1[pair * 2 + 1] = _mm512_permutex2var_epi32(a, pair_hi, b);
+                }
+                let mut s2 = [_mm512_setzero_si512(); 16];
+                for group in 0..4 {
+                    let base = group * 4;
+                    s2[base] = _mm512_permutex2var_epi32(s1[base], quad_lo, s1[base + 2]);
+                    s2[base + 1] = _mm512_permutex2var_epi32(s1[base], quad_hi, s1[base + 2]);
+                    s2[base + 2] = _mm512_permutex2var_epi32(s1[base + 1], quad_lo, s1[base + 3]);
+                    s2[base + 3] = _mm512_permutex2var_epi32(s1[base + 1], quad_hi, s1[base + 3]);
+                }
+                let mut s3 = [_mm512_setzero_si512(); 16];
+                for half in 0..2 {
+                    let left = half * 8;
+                    let right = left + 4;
+                    for quarter in 0..4 {
+                        s3[left + quarter * 2] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_lo,
+                            s2[right + quarter],
+                        );
+                        s3[left + quarter * 2 + 1] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_hi,
+                            s2[right + quarter],
+                        );
+                    }
+                }
+                let mut out = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    out[pair * 2] = _mm512_permutex2var_epi32(s3[pair], half_lo, s3[8 + pair]);
+                    out[pair * 2 + 1] = _mm512_permutex2var_epi32(s3[pair], half_hi, s3[8 + pair]);
+                }
+                out
+            }};
+        }
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut rows = [_mm512_setzero_si512(); 16];
+                for lane in 0..16 {
+                    rows[lane] = unsafe { _mm512_loadu_si512(blocks[lane].as_ptr().cast()) };
+                }
+                transpose16!(rows)
+            }};
+        }
+        macro_rules! mix {
+            (f,$x:expr,$y:expr,$z:expr) => {
+                _mm512_ternarylogic_epi32::<0xca>($x, $y, $z)
+            };
+            (g,$x:expr,$y:expr,$z:expr) => {
+                _mm512_ternarylogic_epi32::<0xe4>($x, $y, $z)
+            };
+            (h,$x:expr,$y:expr,$z:expr) => {
+                _mm512_ternarylogic_epi32::<0x96>($x, $y, $z)
+            };
+            (i,$x:expr,$y:expr,$z:expr) => {
+                _mm512_ternarylogic_epi32::<0x39>($x, $y, $z)
+            };
+        }
+        macro_rules! step3 {
+            ($which:ident,$a0:ident,$b0:ident,$c0:ident,$d0:ident,$a1:ident,$b1:ident,$c1:ident,$d1:ident,$a2:ident,$b2:ident,$c2:ident,$d2:ident,$w0:ident,$w1:ident,$w2:ident,$word:expr,$round:expr,$shift:literal) => {{
+                let key = _mm512_set1_epi32(K[$round] as i32);
+                let mut t0 = _mm512_add_epi32($a0, mix!($which, $b0, $c0, $d0));
+                let mut t1 = _mm512_add_epi32($a1, mix!($which, $b1, $c1, $d1));
+                let mut t2 = _mm512_add_epi32($a2, mix!($which, $b2, $c2, $d2));
+                t0 = _mm512_add_epi32(_mm512_add_epi32(t0, key), $w0[$word]);
+                t1 = _mm512_add_epi32(_mm512_add_epi32(t1, key), $w1[$word]);
+                t2 = _mm512_add_epi32(_mm512_add_epi32(t2, key), $w2[$word]);
+                $a0 = _mm512_add_epi32($b0, _mm512_rol_epi32::<$shift>(t0));
+                $a1 = _mm512_add_epi32($b1, _mm512_rol_epi32::<$shift>(t1));
+                $a2 = _mm512_add_epi32($b2, _mm512_rol_epi32::<$shift>(t2));
+            }};
+        }
+        macro_rules! compress3 {
+            ($words0:expr,$a0:ident,$b0:ident,$c0:ident,$d0:ident,$words1:expr,$a1:ident,$b1:ident,$c1:ident,$d1:ident,$words2:expr,$a2:ident,$b2:ident,$c2:ident,$d2:ident) => {{
+                let words0 = $words0;
+                let words1 = $words1;
+                let words2 = $words2;
+                let initial0 = [$a0, $b0, $c0, $d0];
+                let initial1 = [$a1, $b1, $c1, $d1];
+                let initial2 = [$a2, $b2, $c2, $d2];
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 0, 0, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 1, 1, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 2, 2, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 3, 3, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 4, 4, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 5, 5, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 6, 6, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 7, 7, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 8, 8, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 9, 9, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 10, 10, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 11, 11, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 12, 12, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 13, 13, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 14, 14, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 15, 15, 22
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 1, 16, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 6, 17, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 11, 18, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 0, 19, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 5, 20, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 10, 21, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 15, 22, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 4, 23, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 9, 24, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 14, 25, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 3, 26, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 8, 27, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 13, 28, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 2, 29, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 7, 30, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 12, 31, 20
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 5, 32, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 8, 33, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 11, 34, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 14, 35, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 1, 36, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 4, 37, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 7, 38, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 10, 39, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 13, 40, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 0, 41, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 3, 42, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 6, 43, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 9, 44, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 12, 45, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 15, 46, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 2, 47, 23
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 0, 48, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 7, 49, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 14, 50, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 5, 51, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 12, 52, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 3, 53, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 10, 54, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 1, 55, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 8, 56, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 15, 57, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 6, 58, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 13, 59, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 4, 60, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 11, 61, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 2, 62, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 9, 63, 21
+                );
+                $a0 = _mm512_add_epi32(initial0[0], $a0);
+                $b0 = _mm512_add_epi32(initial0[1], $b0);
+                $c0 = _mm512_add_epi32(initial0[2], $c0);
+                $d0 = _mm512_add_epi32(initial0[3], $d0);
+                $a1 = _mm512_add_epi32(initial1[0], $a1);
+                $b1 = _mm512_add_epi32(initial1[1], $b1);
+                $c1 = _mm512_add_epi32(initial1[2], $c1);
+                $d1 = _mm512_add_epi32(initial1[3], $d1);
+                $a2 = _mm512_add_epi32(initial2[0], $a2);
+                $b2 = _mm512_add_epi32(initial2[1], $b2);
+                $c2 = _mm512_add_epi32(initial2[2], $c2);
+                $d2 = _mm512_add_epi32(initial2[3], $d2);
+            }};
+        }
+        let len = inputs[0].len();
+        let mut lane_words0 = [[0u32; 16]; 4];
+        let mut lane_words1 = [[0u32; 16]; 4];
+        let mut lane_words2 = [[0u32; 16]; 4];
+        for word in 0..4 {
+            for lane in 0..16 {
+                lane_words0[word][lane] = states[lane][word];
+                lane_words1[word][lane] = states[lane + 16][word];
+                lane_words2[word][lane] = states[lane + 32][word];
+            }
+        }
+        // SAFETY: lane_words0[0] exactly matches one native vector.
+        let mut a0 = unsafe { _mm512_loadu_si512(lane_words0[0].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words0[1] exactly matches one native vector.
+        let mut b0 = unsafe { _mm512_loadu_si512(lane_words0[1].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words0[2] exactly matches one native vector.
+        let mut c0 = unsafe { _mm512_loadu_si512(lane_words0[2].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words0[3] exactly matches one native vector.
+        let mut d0 = unsafe { _mm512_loadu_si512(lane_words0[3].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words1[0] exactly matches one native vector.
+        let mut a1 = unsafe { _mm512_loadu_si512(lane_words1[0].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words1[1] exactly matches one native vector.
+        let mut b1 = unsafe { _mm512_loadu_si512(lane_words1[1].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words1[2] exactly matches one native vector.
+        let mut c1 = unsafe { _mm512_loadu_si512(lane_words1[2].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words1[3] exactly matches one native vector.
+        let mut d1 = unsafe { _mm512_loadu_si512(lane_words1[3].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words2[0] exactly matches one native vector.
+        let mut a2 = unsafe { _mm512_loadu_si512(lane_words2[0].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words2[1] exactly matches one native vector.
+        let mut b2 = unsafe { _mm512_loadu_si512(lane_words2[1].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words2[2] exactly matches one native vector.
+        let mut c2 = unsafe { _mm512_loadu_si512(lane_words2[2].as_ptr().cast::<__m512i>()) };
+        // SAFETY: lane_words2[3] exactly matches one native vector.
+        let mut d2 = unsafe { _mm512_loadu_si512(lane_words2[3].as_ptr().cast::<__m512i>()) };
+        let full_blocks = len / 64;
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks0: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks1: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane + 16][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks2: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane + 32][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words0 = load_transposed!(blocks0);
+            let words1 = load_transposed!(blocks1);
+            let words2 = load_transposed!(blocks2);
+            compress3!(
+                words0, a0, b0, c0, d0, words1, a1, b1, c1, d1, words2, a2, b2, c2, d2
+            );
+        }
+        let states0 = [a0, b0, c0, d0];
+        let states1 = [a1, b1, c1, d1];
+        let states2 = [a2, b2, c2, d2];
+        for word in 0..4 {
+            unsafe {
+                _mm512_storeu_si512(
+                    lane_words0[word].as_mut_ptr().cast::<__m512i>(),
+                    states0[word],
+                )
+            };
+        }
+        for word in 0..4 {
+            unsafe {
+                _mm512_storeu_si512(
+                    lane_words1[word].as_mut_ptr().cast::<__m512i>(),
+                    states1[word],
+                )
+            };
+        }
+        for word in 0..4 {
+            unsafe {
+                _mm512_storeu_si512(
+                    lane_words2[word].as_mut_ptr().cast::<__m512i>(),
+                    states2[word],
+                )
+            };
+        }
+        for lane in 0..16 {
+            for word in 0..4 {
+                states[lane][word] = lane_words0[word][lane];
+                states[lane + 16][word] = lane_words1[word][lane];
+                states[lane + 32][word] = lane_words2[word][lane];
+            }
+        }
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+macro_rules! transpose4x4_epi32 {
+    ($r0:expr, $r1:expr, $r2:expr, $r3:expr) => {{
+        let t0 = _mm_unpacklo_epi32($r0, $r1);
+        let t1 = _mm_unpackhi_epi32($r0, $r1);
+        let t2 = _mm_unpacklo_epi32($r2, $r3);
+        let t3 = _mm_unpackhi_epi32($r2, $r3);
+        [
+            _mm_unpacklo_epi64(t0, t2),
+            _mm_unpackhi_epi64(t0, t2),
+            _mm_unpacklo_epi64(t1, t3),
+            _mm_unpackhi_epi64(t1, t3),
+        ]
+    }};
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+macro_rules! load_md5_state8 {
+    ($streams:expr, $base:expr) => {{
+        let streams = &*$streams;
+        let base = $base;
+        macro_rules! load_lane {
+            ($lane:expr) => {{
+                // SAFETY: `state` is a contiguous `[u32; 4]`, exactly 16 bytes.
+                unsafe { _mm_loadu_si128(streams[base + $lane].state.as_ptr().cast::<__m128i>()) }
+            }};
+        }
+        let r0 = load_lane!(0);
+        let r1 = load_lane!(1);
+        let r2 = load_lane!(2);
+        let r3 = load_lane!(3);
+        let r4 = load_lane!(4);
+        let r5 = load_lane!(5);
+        let r6 = load_lane!(6);
+        let r7 = load_lane!(7);
+        let lo = transpose4x4_epi32!(r0, r1, r2, r3);
+        let hi = transpose4x4_epi32!(r4, r5, r6, r7);
+        core::array::from_fn(|word| {
+            _mm256_inserti128_si256::<1>(_mm256_castsi128_si256(lo[word]), hi[word])
+        })
+    }};
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+macro_rules! store_md5_state8 {
+    ($streams:expr, $base:expr, $a:expr, $b:expr, $c:expr, $d:expr) => {{
+        let streams = &mut *$streams;
+        let base = $base;
+        let v = [$a, $b, $c, $d];
+        let lo: [__m128i; 4] = core::array::from_fn(|word| _mm256_castsi256_si128(v[word]));
+        let hi: [__m128i; 4] = core::array::from_fn(|word| _mm256_extracti128_si256::<1>(v[word]));
+        let rows0 = transpose4x4_epi32!(lo[0], lo[1], lo[2], lo[3]);
+        let rows1 = transpose4x4_epi32!(hi[0], hi[1], hi[2], hi[3]);
+        macro_rules! store_lane {
+            ($lane:expr, $row:expr) => {{
+                // SAFETY: `state` is a contiguous `[u32; 4]`, exactly 16 bytes.
+                unsafe {
+                    _mm_storeu_si128(
+                        streams[base + $lane].state.as_mut_ptr().cast::<__m128i>(),
+                        $row,
+                    )
+                };
+            }};
+        }
+        store_lane!(0, rows0[0]);
+        store_lane!(1, rows0[1]);
+        store_lane!(2, rows0[2]);
+        store_lane!(3, rows0[3]);
+        store_lane!(4, rows1[0]);
+        store_lane!(5, rows1[1]);
+        store_lane!(6, rows1[2]);
+        store_lane!(7, rows1[3]);
+    }};
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+macro_rules! load_md5_state16 {
+    ($streams:expr, $base:expr) => {{
+        let streams = &*$streams;
+        let base = $base;
+        macro_rules! load_lane {
+            ($lane:expr) => {{
+                // SAFETY: `state` is a contiguous `[u32; 4]`, exactly 16 bytes.
+                unsafe { _mm_loadu_si128(streams[base + $lane].state.as_ptr().cast::<__m128i>()) }
+            }};
+        }
+        let g0 = transpose4x4_epi32!(load_lane!(0), load_lane!(1), load_lane!(2), load_lane!(3));
+        let g1 = transpose4x4_epi32!(load_lane!(4), load_lane!(5), load_lane!(6), load_lane!(7));
+        let g2 = transpose4x4_epi32!(load_lane!(8), load_lane!(9), load_lane!(10), load_lane!(11));
+        let g3 = transpose4x4_epi32!(
+            load_lane!(12),
+            load_lane!(13),
+            load_lane!(14),
+            load_lane!(15)
+        );
+        core::array::from_fn(|word| {
+            let v = _mm512_castsi128_si512(g0[word]);
+            let v = _mm512_inserti32x4::<1>(v, g1[word]);
+            let v = _mm512_inserti32x4::<2>(v, g2[word]);
+            _mm512_inserti32x4::<3>(v, g3[word])
+        })
+    }};
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+macro_rules! store_md5_state16 {
+    ($streams:expr, $base:expr, $a:expr, $b:expr, $c:expr, $d:expr) => {{
+        let streams = &mut *$streams;
+        let base = $base;
+        let v = [$a, $b, $c, $d];
+        let q0: [__m128i; 4] = core::array::from_fn(|word| _mm512_castsi512_si128(v[word]));
+        let q1: [__m128i; 4] = core::array::from_fn(|word| _mm512_extracti32x4_epi32::<1>(v[word]));
+        let q2: [__m128i; 4] = core::array::from_fn(|word| _mm512_extracti32x4_epi32::<2>(v[word]));
+        let q3: [__m128i; 4] = core::array::from_fn(|word| _mm512_extracti32x4_epi32::<3>(v[word]));
+        let rows0 = transpose4x4_epi32!(q0[0], q0[1], q0[2], q0[3]);
+        let rows1 = transpose4x4_epi32!(q1[0], q1[1], q1[2], q1[3]);
+        let rows2 = transpose4x4_epi32!(q2[0], q2[1], q2[2], q2[3]);
+        let rows3 = transpose4x4_epi32!(q3[0], q3[1], q3[2], q3[3]);
+        macro_rules! store_lane {
+            ($lane:expr, $row:expr) => {{
+                // SAFETY: `state` is a contiguous `[u32; 4]`, exactly 16 bytes.
+                unsafe {
+                    _mm_storeu_si128(
+                        streams[base + $lane].state.as_mut_ptr().cast::<__m128i>(),
+                        $row,
+                    )
+                };
+            }};
+        }
+        store_lane!(0, rows0[0]);
+        store_lane!(1, rows0[1]);
+        store_lane!(2, rows0[2]);
+        store_lane!(3, rows0[3]);
+        store_lane!(4, rows1[0]);
+        store_lane!(5, rows1[1]);
+        store_lane!(6, rows1[2]);
+        store_lane!(7, rows1[3]);
+        store_lane!(8, rows2[0]);
+        store_lane!(9, rows2[1]);
+        store_lane!(10, rows2[2]);
+        store_lane!(11, rows2[3]);
+        store_lane!(12, rows3[0]);
+        store_lane!(13, rows3[1]);
+        store_lane!(14, rows3[2]);
+        store_lane!(15, rows3[3]);
+    }};
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx2_md5_state_kernel(
+        avx2: Avx2,
+        streams: &mut [Md5State],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(streams.len(), 8);
+        debug_assert_eq!(inputs.len(), 8);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        debug_assert!(inputs[0].len().is_multiple_of(64));
+        let _ = avx2;
+
+        macro_rules! transpose8 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let t0 = _mm256_unpacklo_epi32(rows[0], rows[1]);
+                let t1 = _mm256_unpackhi_epi32(rows[0], rows[1]);
+                let t2 = _mm256_unpacklo_epi32(rows[2], rows[3]);
+                let t3 = _mm256_unpackhi_epi32(rows[2], rows[3]);
+                let t4 = _mm256_unpacklo_epi32(rows[4], rows[5]);
+                let t5 = _mm256_unpackhi_epi32(rows[4], rows[5]);
+                let t6 = _mm256_unpacklo_epi32(rows[6], rows[7]);
+                let t7 = _mm256_unpackhi_epi32(rows[6], rows[7]);
+
+                let u0 = _mm256_unpacklo_epi64(t0, t2);
+                let u1 = _mm256_unpackhi_epi64(t0, t2);
+                let u2 = _mm256_unpacklo_epi64(t1, t3);
+                let u3 = _mm256_unpackhi_epi64(t1, t3);
+                let u4 = _mm256_unpacklo_epi64(t4, t6);
+                let u5 = _mm256_unpackhi_epi64(t4, t6);
+                let u6 = _mm256_unpacklo_epi64(t5, t7);
+                let u7 = _mm256_unpackhi_epi64(t5, t7);
+
+                [
+                    _mm256_permute2x128_si256::<0x20>(u0, u4),
+                    _mm256_permute2x128_si256::<0x20>(u1, u5),
+                    _mm256_permute2x128_si256::<0x20>(u2, u6),
+                    _mm256_permute2x128_si256::<0x20>(u3, u7),
+                    _mm256_permute2x128_si256::<0x31>(u0, u4),
+                    _mm256_permute2x128_si256::<0x31>(u1, u5),
+                    _mm256_permute2x128_si256::<0x31>(u2, u6),
+                    _mm256_permute2x128_si256::<0x31>(u3, u7),
+                ]
+            }};
+        }
+
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut lo = [_mm256_setzero_si256(); 8];
+                let mut hi = lo;
+                for lane in 0..8 {
+                    let ptr = blocks[lane].as_ptr();
+                    // SAFETY: every entry is a 64-byte block, and unaligned AVX2
+                    // loads read exactly bytes 0..32 and 32..64 respectively.
+                    lo[lane] = unsafe { _mm256_loadu_si256(ptr.cast::<__m256i>()) };
+                    // SAFETY: bytes 32..64 are inside the same 64-byte block.
+                    hi[lane] = unsafe { _mm256_loadu_si256(ptr.add(32).cast::<__m256i>()) };
+                }
+                let lo = transpose8!(lo);
+                let hi = transpose8!(hi);
+                [
+                    lo[0], lo[1], lo[2], lo[3], lo[4], lo[5], lo[6], lo[7], hi[0], hi[1], hi[2],
+                    hi[3], hi[4], hi[5], hi[6], hi[7],
+                ]
+            }};
+        }
+
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $y), _mm256_andnot_si256($x, $z))
+            };
+            (g, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $z), _mm256_andnot_si256($z, $y))
+            };
+            (h, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256(_mm256_xor_si256($x, $y), $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256($y, _mm256_or_si256($x, _mm256_xor_si256($z, $ones)))
+            };
+        }
+
+        macro_rules! step {
+            (g, $a:ident, $b:ident, $c:ident, $d:ident, $words:ident, $ones:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mut t = _mm256_add_epi32($a, _mm256_andnot_si256($d, $c));
+                t = _mm256_add_epi32(t, _mm256_set1_epi32(K[$round] as i32));
+                t = _mm256_add_epi32(t, $words[$word]);
+                t = _mm256_add_epi32(t, _mm256_and_si256($d, $b));
+                let rotated = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t),
+                );
+                $a = _mm256_add_epi32($b, rotated);
+            }};
+            ($which:ident, $a:ident, $b:ident, $c:ident, $d:ident, $words:ident, $ones:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mut t = _mm256_add_epi32($a, mix!($which, $b, $c, $d, $ones));
+                t = _mm256_add_epi32(t, _mm256_set1_epi32(K[$round] as i32));
+                t = _mm256_add_epi32(t, $words[$word]);
+                let rotated = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t),
+                );
+                $a = _mm256_add_epi32($b, rotated);
+            }};
+        }
+
+        macro_rules! compress {
+            ($word_expr:expr, $a:ident, $b:ident, $c:ident, $d:ident, $ones:ident) => {{
+                let words = $word_expr;
+                let initial = [$a, $b, $c, $d];
+                step!(f, $a, $b, $c, $d, words, $ones, 0, 0, 7);
+                step!(f, $d, $a, $b, $c, words, $ones, 1, 1, 12);
+                step!(f, $c, $d, $a, $b, words, $ones, 2, 2, 17);
+                step!(f, $b, $c, $d, $a, words, $ones, 3, 3, 22);
+                step!(f, $a, $b, $c, $d, words, $ones, 4, 4, 7);
+                step!(f, $d, $a, $b, $c, words, $ones, 5, 5, 12);
+                step!(f, $c, $d, $a, $b, words, $ones, 6, 6, 17);
+                step!(f, $b, $c, $d, $a, words, $ones, 7, 7, 22);
+                step!(f, $a, $b, $c, $d, words, $ones, 8, 8, 7);
+                step!(f, $d, $a, $b, $c, words, $ones, 9, 9, 12);
+                step!(f, $c, $d, $a, $b, words, $ones, 10, 10, 17);
+                step!(f, $b, $c, $d, $a, words, $ones, 11, 11, 22);
+                step!(f, $a, $b, $c, $d, words, $ones, 12, 12, 7);
+                step!(f, $d, $a, $b, $c, words, $ones, 13, 13, 12);
+                step!(f, $c, $d, $a, $b, words, $ones, 14, 14, 17);
+                step!(f, $b, $c, $d, $a, words, $ones, 15, 15, 22);
+                step!(g, $a, $b, $c, $d, words, $ones, 1, 16, 5);
+                step!(g, $d, $a, $b, $c, words, $ones, 6, 17, 9);
+                step!(g, $c, $d, $a, $b, words, $ones, 11, 18, 14);
+                step!(g, $b, $c, $d, $a, words, $ones, 0, 19, 20);
+                step!(g, $a, $b, $c, $d, words, $ones, 5, 20, 5);
+                step!(g, $d, $a, $b, $c, words, $ones, 10, 21, 9);
+                step!(g, $c, $d, $a, $b, words, $ones, 15, 22, 14);
+                step!(g, $b, $c, $d, $a, words, $ones, 4, 23, 20);
+                step!(g, $a, $b, $c, $d, words, $ones, 9, 24, 5);
+                step!(g, $d, $a, $b, $c, words, $ones, 14, 25, 9);
+                step!(g, $c, $d, $a, $b, words, $ones, 3, 26, 14);
+                step!(g, $b, $c, $d, $a, words, $ones, 8, 27, 20);
+                step!(g, $a, $b, $c, $d, words, $ones, 13, 28, 5);
+                step!(g, $d, $a, $b, $c, words, $ones, 2, 29, 9);
+                step!(g, $c, $d, $a, $b, words, $ones, 7, 30, 14);
+                step!(g, $b, $c, $d, $a, words, $ones, 12, 31, 20);
+                step!(h, $a, $b, $c, $d, words, $ones, 5, 32, 4);
+                step!(h, $d, $a, $b, $c, words, $ones, 8, 33, 11);
+                step!(h, $c, $d, $a, $b, words, $ones, 11, 34, 16);
+                step!(h, $b, $c, $d, $a, words, $ones, 14, 35, 23);
+                step!(h, $a, $b, $c, $d, words, $ones, 1, 36, 4);
+                step!(h, $d, $a, $b, $c, words, $ones, 4, 37, 11);
+                step!(h, $c, $d, $a, $b, words, $ones, 7, 38, 16);
+                step!(h, $b, $c, $d, $a, words, $ones, 10, 39, 23);
+                step!(h, $a, $b, $c, $d, words, $ones, 13, 40, 4);
+                step!(h, $d, $a, $b, $c, words, $ones, 0, 41, 11);
+                step!(h, $c, $d, $a, $b, words, $ones, 3, 42, 16);
+                step!(h, $b, $c, $d, $a, words, $ones, 6, 43, 23);
+                step!(h, $a, $b, $c, $d, words, $ones, 9, 44, 4);
+                step!(h, $d, $a, $b, $c, words, $ones, 12, 45, 11);
+                step!(h, $c, $d, $a, $b, words, $ones, 15, 46, 16);
+                step!(h, $b, $c, $d, $a, words, $ones, 2, 47, 23);
+                step!(i, $a, $b, $c, $d, words, $ones, 0, 48, 6);
+                step!(i, $d, $a, $b, $c, words, $ones, 7, 49, 10);
+                step!(i, $c, $d, $a, $b, words, $ones, 14, 50, 15);
+                step!(i, $b, $c, $d, $a, words, $ones, 5, 51, 21);
+                step!(i, $a, $b, $c, $d, words, $ones, 12, 52, 6);
+                step!(i, $d, $a, $b, $c, words, $ones, 3, 53, 10);
+                step!(i, $c, $d, $a, $b, words, $ones, 10, 54, 15);
+                step!(i, $b, $c, $d, $a, words, $ones, 1, 55, 21);
+                step!(i, $a, $b, $c, $d, words, $ones, 8, 56, 6);
+                step!(i, $d, $a, $b, $c, words, $ones, 15, 57, 10);
+                step!(i, $c, $d, $a, $b, words, $ones, 6, 58, 15);
+                step!(i, $b, $c, $d, $a, words, $ones, 13, 59, 21);
+                step!(i, $a, $b, $c, $d, words, $ones, 4, 60, 6);
+                step!(i, $d, $a, $b, $c, words, $ones, 11, 61, 10);
+                step!(i, $c, $d, $a, $b, words, $ones, 2, 62, 15);
+                step!(i, $b, $c, $d, $a, words, $ones, 9, 63, 21);
+                $a = _mm256_add_epi32(initial[0], $a);
+                $b = _mm256_add_epi32(initial[1], $b);
+                $c = _mm256_add_epi32(initial[2], $c);
+                $d = _mm256_add_epi32(initial[3], $d);
+            }};
+        }
+
+        let [mut a, mut b, mut c, mut d] = load_md5_state8!(streams, 0);
+        let all_ones = _mm256_set1_epi32(-1);
+
+        let block_count = inputs[0].len() / 64;
+        for block_index in 0..block_count {
+            let offset = block_index * 64;
+            let blocks: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words = load_transposed!(blocks);
+            compress!(words, a, b, c, d, all_ones);
+        }
+
+        store_md5_state8!(streams, 0, a, b, c, d);
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx2_dual_md5_state_kernel(
+        avx2: Avx2,
+        streams: &mut [Md5State],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(inputs.len(), 16);
+        debug_assert_eq!(streams.len(), 16);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        let _ = avx2;
+
+        macro_rules! transpose8 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let t0 = _mm256_unpacklo_epi32(rows[0], rows[1]);
+                let t1 = _mm256_unpackhi_epi32(rows[0], rows[1]);
+                let t2 = _mm256_unpacklo_epi32(rows[2], rows[3]);
+                let t3 = _mm256_unpackhi_epi32(rows[2], rows[3]);
+                let t4 = _mm256_unpacklo_epi32(rows[4], rows[5]);
+                let t5 = _mm256_unpackhi_epi32(rows[4], rows[5]);
+                let t6 = _mm256_unpacklo_epi32(rows[6], rows[7]);
+                let t7 = _mm256_unpackhi_epi32(rows[6], rows[7]);
+
+                let u0 = _mm256_unpacklo_epi64(t0, t2);
+                let u1 = _mm256_unpackhi_epi64(t0, t2);
+                let u2 = _mm256_unpacklo_epi64(t1, t3);
+                let u3 = _mm256_unpackhi_epi64(t1, t3);
+                let u4 = _mm256_unpacklo_epi64(t4, t6);
+                let u5 = _mm256_unpackhi_epi64(t4, t6);
+                let u6 = _mm256_unpacklo_epi64(t5, t7);
+                let u7 = _mm256_unpackhi_epi64(t5, t7);
+
+                [
+                    _mm256_permute2x128_si256::<0x20>(u0, u4),
+                    _mm256_permute2x128_si256::<0x20>(u1, u5),
+                    _mm256_permute2x128_si256::<0x20>(u2, u6),
+                    _mm256_permute2x128_si256::<0x20>(u3, u7),
+                    _mm256_permute2x128_si256::<0x31>(u0, u4),
+                    _mm256_permute2x128_si256::<0x31>(u1, u5),
+                    _mm256_permute2x128_si256::<0x31>(u2, u6),
+                    _mm256_permute2x128_si256::<0x31>(u3, u7),
+                ]
+            }};
+        }
+
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut lo = [_mm256_setzero_si256(); 8];
+                let mut hi = lo;
+                for lane in 0..8 {
+                    let ptr = blocks[lane].as_ptr();
+                    // SAFETY: every entry is a 64-byte block, and unaligned AVX2
+                    // loads read exactly bytes 0..32 and 32..64 respectively.
+                    lo[lane] = unsafe { _mm256_loadu_si256(ptr.cast::<__m256i>()) };
+                    // SAFETY: bytes 32..64 are inside the same 64-byte block.
+                    hi[lane] = unsafe { _mm256_loadu_si256(ptr.add(32).cast::<__m256i>()) };
+                }
+                let lo = transpose8!(lo);
+                let hi = transpose8!(hi);
+                [
+                    lo[0], lo[1], lo[2], lo[3], lo[4], lo[5], lo[6], lo[7], hi[0], hi[1], hi[2],
+                    hi[3], hi[4], hi[5], hi[6], hi[7],
+                ]
+            }};
+        }
+
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $y), _mm256_andnot_si256($x, $z))
+            };
+            (g, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $z), _mm256_andnot_si256($z, $y))
+            };
+            (h, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256(_mm256_xor_si256($x, $y), $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256($y, _mm256_or_si256($x, _mm256_xor_si256($z, $ones)))
+            };
+        }
+
+        macro_rules! step2 {
+            (g, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $a1:ident, $b1:ident, $c1:ident, $d1:ident, $words0:ident, $words1:ident, $ones:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mut t0 = _mm256_add_epi32($a0, _mm256_andnot_si256($d0, $c0));
+                let mut t1 = _mm256_add_epi32($a1, _mm256_andnot_si256($d1, $c1));
+                let key = _mm256_set1_epi32(K[$round] as i32);
+                t0 = _mm256_add_epi32(t0, key);
+                t1 = _mm256_add_epi32(t1, key);
+                t0 = _mm256_add_epi32(t0, $words0[$word]);
+                t1 = _mm256_add_epi32(t1, $words1[$word]);
+                t0 = _mm256_add_epi32(t0, _mm256_and_si256($d0, $b0));
+                t1 = _mm256_add_epi32(t1, _mm256_and_si256($d1, $b1));
+                let rotated0 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t0),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t0),
+                );
+                let rotated1 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t1),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t1),
+                );
+                $a0 = _mm256_add_epi32($b0, rotated0);
+                $a1 = _mm256_add_epi32($b1, rotated1);
+            }};
+            ($which:ident, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $a1:ident, $b1:ident, $c1:ident, $d1:ident, $words0:ident, $words1:ident, $ones:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mixed0 = mix!($which, $b0, $c0, $d0, $ones);
+                let mixed1 = mix!($which, $b1, $c1, $d1, $ones);
+                let mut t0 = _mm256_add_epi32($a0, mixed0);
+                let mut t1 = _mm256_add_epi32($a1, mixed1);
+                let key = _mm256_set1_epi32(K[$round] as i32);
+                t0 = _mm256_add_epi32(t0, key);
+                t1 = _mm256_add_epi32(t1, key);
+                t0 = _mm256_add_epi32(t0, $words0[$word]);
+                t1 = _mm256_add_epi32(t1, $words1[$word]);
+                let rotated0 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t0),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t0),
+                );
+                let rotated1 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t1),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t1),
+                );
+                $a0 = _mm256_add_epi32($b0, rotated0);
+                $a1 = _mm256_add_epi32($b1, rotated1);
+            }};
+        }
+
+        macro_rules! compress2 {
+            ($words0:expr, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $words1:expr, $a1:ident, $b1:ident, $c1:ident, $d1:ident, $ones:ident) => {{
+                let words0 = $words0;
+                let words1 = $words1;
+                let initial0 = [$a0, $b0, $c0, $d0];
+                let initial1 = [$a1, $b1, $c1, $d1];
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 0, 0, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 1, 1, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 2, 2, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 3, 3, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 4, 4, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 5, 5, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 6, 6, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 7, 7, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 8, 8, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 9, 9, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 10, 10, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 11, 11, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 12, 12, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 13, 13, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 14, 14, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 15, 15, 22
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 1, 16, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 6, 17, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 11, 18, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 0, 19, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 5, 20, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 10, 21, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 15, 22, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 4, 23, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 9, 24, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 14, 25, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 3, 26, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 8, 27, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 13, 28, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 2, 29, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 7, 30, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 12, 31, 20
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 5, 32, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 8, 33, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 11, 34, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 14, 35, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 1, 36, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 4, 37, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 7, 38, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 10, 39, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 13, 40, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 0, 41, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 3, 42, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 6, 43, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 9, 44, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 12, 45, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 15, 46, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 2, 47, 23
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 0, 48, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 7, 49, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 14, 50, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 5, 51, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 12, 52, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 3, 53, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 10, 54, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 1, 55, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 8, 56, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 15, 57, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 6, 58, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 13, 59, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, $ones, 4, 60, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, $ones, 11, 61, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, $ones, 2, 62, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, $ones, 9, 63, 21
+                );
+                $a0 = _mm256_add_epi32(initial0[0], $a0);
+                $b0 = _mm256_add_epi32(initial0[1], $b0);
+                $c0 = _mm256_add_epi32(initial0[2], $c0);
+                $d0 = _mm256_add_epi32(initial0[3], $d0);
+                $a1 = _mm256_add_epi32(initial1[0], $a1);
+                $b1 = _mm256_add_epi32(initial1[1], $b1);
+                $c1 = _mm256_add_epi32(initial1[2], $c1);
+                $d1 = _mm256_add_epi32(initial1[3], $d1);
+            }};
+        }
+
+        let len = inputs[0].len();
+        let [mut a0, mut b0, mut c0, mut d0] = load_md5_state8!(streams, 0);
+        let [mut a1, mut b1, mut c1, mut d1] = load_md5_state8!(streams, 8);
+        let all_ones = _mm256_set1_epi32(-1);
+        let full_blocks = len / 64;
+
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks0: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks1: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane + 8][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words0 = load_transposed!(blocks0);
+            let words1 = load_transposed!(blocks1);
+            compress2!(words0, a0, b0, c0, d0, words1, a1, b1, c1, d1, all_ones);
+        }
+
+        store_md5_state8!(streams, 0, a0, b0, c0, d0);
+        store_md5_state8!(streams, 8, a1, b1, c1, d1);
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx2_triple_md5_state_kernel(
+        avx2: Avx2,
+        streams: &mut [Md5State],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(inputs.len(), 24);
+        debug_assert_eq!(streams.len(), 24);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        let _ = avx2;
+
+        macro_rules! transpose8 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let t0 = _mm256_unpacklo_epi32(rows[0], rows[1]);
+                let t1 = _mm256_unpackhi_epi32(rows[0], rows[1]);
+                let t2 = _mm256_unpacklo_epi32(rows[2], rows[3]);
+                let t3 = _mm256_unpackhi_epi32(rows[2], rows[3]);
+                let t4 = _mm256_unpacklo_epi32(rows[4], rows[5]);
+                let t5 = _mm256_unpackhi_epi32(rows[4], rows[5]);
+                let t6 = _mm256_unpacklo_epi32(rows[6], rows[7]);
+                let t7 = _mm256_unpackhi_epi32(rows[6], rows[7]);
+                let u0 = _mm256_unpacklo_epi64(t0, t2);
+                let u1 = _mm256_unpackhi_epi64(t0, t2);
+                let u2 = _mm256_unpacklo_epi64(t1, t3);
+                let u3 = _mm256_unpackhi_epi64(t1, t3);
+                let u4 = _mm256_unpacklo_epi64(t4, t6);
+                let u5 = _mm256_unpackhi_epi64(t4, t6);
+                let u6 = _mm256_unpacklo_epi64(t5, t7);
+                let u7 = _mm256_unpackhi_epi64(t5, t7);
+                [
+                    _mm256_permute2x128_si256::<0x20>(u0, u4),
+                    _mm256_permute2x128_si256::<0x20>(u1, u5),
+                    _mm256_permute2x128_si256::<0x20>(u2, u6),
+                    _mm256_permute2x128_si256::<0x20>(u3, u7),
+                    _mm256_permute2x128_si256::<0x31>(u0, u4),
+                    _mm256_permute2x128_si256::<0x31>(u1, u5),
+                    _mm256_permute2x128_si256::<0x31>(u2, u6),
+                    _mm256_permute2x128_si256::<0x31>(u3, u7),
+                ]
+            }};
+        }
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut lo = [_mm256_setzero_si256(); 8];
+                let mut hi = lo;
+                for lane in 0..8 {
+                    let ptr = blocks[lane].as_ptr();
+                    lo[lane] = unsafe { _mm256_loadu_si256(ptr.cast::<__m256i>()) };
+                    hi[lane] = unsafe { _mm256_loadu_si256(ptr.add(32).cast::<__m256i>()) };
+                }
+                let lo = transpose8!(lo);
+                let hi = transpose8!(hi);
+                [
+                    lo[0], lo[1], lo[2], lo[3], lo[4], lo[5], lo[6], lo[7], hi[0], hi[1], hi[2],
+                    hi[3], hi[4], hi[5], hi[6], hi[7],
+                ]
+            }};
+        }
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_or_si256(_mm256_and_si256($x, $y), _mm256_andnot_si256($x, $z))
+            };
+            (h, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256(_mm256_xor_si256($x, $y), $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr, $ones:expr) => {
+                _mm256_xor_si256($y, _mm256_or_si256($x, _mm256_xor_si256($z, $ones)))
+            };
+        }
+        macro_rules! step3 {
+            (g, $a0:ident,$b0:ident,$c0:ident,$d0:ident, $a1:ident,$b1:ident,$c1:ident,$d1:ident, $a2:ident,$b2:ident,$c2:ident,$d2:ident, $w0:ident,$w1:ident,$w2:ident,$ones:ident,$word:expr,$round:expr,$shift:literal) => {{
+                let key = _mm256_set1_epi32(K[$round] as i32);
+                let mut t0 = _mm256_add_epi32($a0, _mm256_andnot_si256($d0, $c0));
+                let mut t1 = _mm256_add_epi32($a1, _mm256_andnot_si256($d1, $c1));
+                let mut t2 = _mm256_add_epi32($a2, _mm256_andnot_si256($d2, $c2));
+                t0 = _mm256_add_epi32(_mm256_add_epi32(t0, key), $w0[$word]);
+                t1 = _mm256_add_epi32(_mm256_add_epi32(t1, key), $w1[$word]);
+                t2 = _mm256_add_epi32(_mm256_add_epi32(t2, key), $w2[$word]);
+                t0 = _mm256_add_epi32(t0, _mm256_and_si256($d0, $b0));
+                t1 = _mm256_add_epi32(t1, _mm256_and_si256($d1, $b1));
+                t2 = _mm256_add_epi32(t2, _mm256_and_si256($d2, $b2));
+                let r0 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t0),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t0),
+                );
+                let r1 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t1),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t1),
+                );
+                let r2 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t2),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t2),
+                );
+                $a0 = _mm256_add_epi32($b0, r0);
+                $a1 = _mm256_add_epi32($b1, r1);
+                $a2 = _mm256_add_epi32($b2, r2);
+            }};
+            ($which:ident, $a0:ident,$b0:ident,$c0:ident,$d0:ident, $a1:ident,$b1:ident,$c1:ident,$d1:ident, $a2:ident,$b2:ident,$c2:ident,$d2:ident, $w0:ident,$w1:ident,$w2:ident,$ones:ident,$word:expr,$round:expr,$shift:literal) => {{
+                let key = _mm256_set1_epi32(K[$round] as i32);
+                let mut t0 = _mm256_add_epi32($a0, mix!($which, $b0, $c0, $d0, $ones));
+                let mut t1 = _mm256_add_epi32($a1, mix!($which, $b1, $c1, $d1, $ones));
+                let mut t2 = _mm256_add_epi32($a2, mix!($which, $b2, $c2, $d2, $ones));
+                t0 = _mm256_add_epi32(_mm256_add_epi32(t0, key), $w0[$word]);
+                t1 = _mm256_add_epi32(_mm256_add_epi32(t1, key), $w1[$word]);
+                t2 = _mm256_add_epi32(_mm256_add_epi32(t2, key), $w2[$word]);
+                let r0 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t0),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t0),
+                );
+                let r1 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t1),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t1),
+                );
+                let r2 = _mm256_or_si256(
+                    _mm256_slli_epi32::<$shift>(t2),
+                    _mm256_srli_epi32::<{ 32 - $shift }>(t2),
+                );
+                $a0 = _mm256_add_epi32($b0, r0);
+                $a1 = _mm256_add_epi32($b1, r1);
+                $a2 = _mm256_add_epi32($b2, r2);
+            }};
+        }
+        macro_rules! compress3 {
+            ($words0:expr,$a0:ident,$b0:ident,$c0:ident,$d0:ident, $words1:expr,$a1:ident,$b1:ident,$c1:ident,$d1:ident, $words2:expr,$a2:ident,$b2:ident,$c2:ident,$d2:ident, $ones:ident) => {{
+                let words0 = $words0;
+                let words1 = $words1;
+                let words2 = $words2;
+                let initial0 = [$a0, $b0, $c0, $d0];
+                let initial1 = [$a1, $b1, $c1, $d1];
+                let initial2 = [$a2, $b2, $c2, $d2];
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 0, 0, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 1, 1, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 2, 2, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 3, 3, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 4, 4, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 5, 5, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 6, 6, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 7, 7, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 8, 8, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 9, 9, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 10, 10, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 11, 11, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 12, 12, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 13, 13, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 14, 14, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 15, 15, 22
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 1, 16, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 6, 17, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 11, 18, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 0, 19, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 5, 20, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 10, 21, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 15, 22, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 4, 23, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 9, 24, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 14, 25, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 3, 26, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 8, 27, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 13, 28, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 2, 29, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 7, 30, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 12, 31, 20
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 5, 32, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 8, 33, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 11, 34, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 14, 35, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 1, 36, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 4, 37, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 7, 38, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 10, 39, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 13, 40, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 0, 41, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 3, 42, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 6, 43, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 9, 44, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 12, 45, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 15, 46, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 2, 47, 23
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 0, 48, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 7, 49, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 14, 50, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 5, 51, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 12, 52, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 3, 53, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 10, 54, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 1, 55, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 8, 56, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 15, 57, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 6, 58, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 13, 59, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, $ones, 4, 60, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, $ones, 11, 61, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, $ones, 2, 62, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, $ones, 9, 63, 21
+                );
+                $a0 = _mm256_add_epi32(initial0[0], $a0);
+                $b0 = _mm256_add_epi32(initial0[1], $b0);
+                $c0 = _mm256_add_epi32(initial0[2], $c0);
+                $d0 = _mm256_add_epi32(initial0[3], $d0);
+                $a1 = _mm256_add_epi32(initial1[0], $a1);
+                $b1 = _mm256_add_epi32(initial1[1], $b1);
+                $c1 = _mm256_add_epi32(initial1[2], $c1);
+                $d1 = _mm256_add_epi32(initial1[3], $d1);
+                $a2 = _mm256_add_epi32(initial2[0], $a2);
+                $b2 = _mm256_add_epi32(initial2[1], $b2);
+                $c2 = _mm256_add_epi32(initial2[2], $c2);
+                $d2 = _mm256_add_epi32(initial2[3], $d2);
+            }};
+        }
+
+        let len = inputs[0].len();
+        let [mut a0, mut b0, mut c0, mut d0] = load_md5_state8!(streams, 0);
+        let [mut a1, mut b1, mut c1, mut d1] = load_md5_state8!(streams, 8);
+        let [mut a2, mut b2, mut c2, mut d2] = load_md5_state8!(streams, 16);
+        let all_ones = _mm256_set1_epi32(-1);
+        let full_blocks = len / 64;
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks0: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks1: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane + 8][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks2: [&[u8; 64]; 8] = core::array::from_fn(|lane| {
+                inputs[lane + 16][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words0 = load_transposed!(blocks0);
+            let words1 = load_transposed!(blocks1);
+            let words2 = load_transposed!(blocks2);
+            compress3!(
+                words0, a0, b0, c0, d0, words1, a1, b1, c1, d1, words2, a2, b2, c2, d2, all_ones
+            );
+        }
+        store_md5_state8!(streams, 0, a0, b0, c0, d0);
+        store_md5_state8!(streams, 8, a1, b1, c1, d1);
+        store_md5_state8!(streams, 16, a2, b2, c2, d2);
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx512_md5_state_kernel(
+        avx512: Avx512,
+        streams: &mut [Md5State],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(streams.len(), 16);
+        debug_assert_eq!(inputs.len(), 16);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        debug_assert!(inputs[0].len().is_multiple_of(64));
+        let _ = avx512;
+
+        macro_rules! transpose16 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let pair_lo =
+                    _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+                let pair_hi =
+                    _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+                let quad_lo =
+                    _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
+                let quad_hi =
+                    _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+                let oct_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+                let oct_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+                let half_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+                let half_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+
+                let mut s1 = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    let a = rows[pair * 2];
+                    let b = rows[pair * 2 + 1];
+                    s1[pair * 2] = _mm512_permutex2var_epi32(a, pair_lo, b);
+                    s1[pair * 2 + 1] = _mm512_permutex2var_epi32(a, pair_hi, b);
+                }
+
+                let mut s2 = [_mm512_setzero_si512(); 16];
+                for group in 0..4 {
+                    let base = group * 4;
+                    s2[base] = _mm512_permutex2var_epi32(s1[base], quad_lo, s1[base + 2]);
+                    s2[base + 1] = _mm512_permutex2var_epi32(s1[base], quad_hi, s1[base + 2]);
+                    s2[base + 2] = _mm512_permutex2var_epi32(s1[base + 1], quad_lo, s1[base + 3]);
+                    s2[base + 3] = _mm512_permutex2var_epi32(s1[base + 1], quad_hi, s1[base + 3]);
+                }
+
+                let mut s3 = [_mm512_setzero_si512(); 16];
+                for half in 0..2 {
+                    let left = half * 8;
+                    let right = left + 4;
+                    for quarter in 0..4 {
+                        s3[left + quarter * 2] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_lo,
+                            s2[right + quarter],
+                        );
+                        s3[left + quarter * 2 + 1] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_hi,
+                            s2[right + quarter],
+                        );
+                    }
+                }
+
+                let mut out = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    out[pair * 2] = _mm512_permutex2var_epi32(s3[pair], half_lo, s3[8 + pair]);
+                    out[pair * 2 + 1] = _mm512_permutex2var_epi32(s3[pair], half_hi, s3[8 + pair]);
+                }
+                out
+            }};
+        }
+
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut rows = [_mm512_setzero_si512(); 16];
+                for lane in 0..16 {
+                    // SAFETY: each entry is a full 64-byte MD5 block and the
+                    // unaligned AVX-512 load reads exactly those 64 bytes.
+                    rows[lane] = unsafe { _mm512_loadu_si512(blocks[lane].as_ptr().cast()) };
+                }
+                transpose16!(rows)
+            }};
+        }
+
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0xca>($x, $y, $z)
+            };
+            (g, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0xe4>($x, $y, $z)
+            };
+            (h, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0x96>($x, $y, $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0x39>($x, $y, $z)
+            };
+        }
+
+        macro_rules! step {
+            ($which:ident, $a:ident, $b:ident, $c:ident, $d:ident, $words:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mixed = mix!($which, $b, $c, $d);
+                let mut t = _mm512_add_epi32($a, mixed);
+                t = _mm512_add_epi32(t, _mm512_set1_epi32(K[$round] as i32));
+                t = _mm512_add_epi32(t, $words[$word]);
+                $a = _mm512_add_epi32($b, _mm512_rol_epi32::<$shift>(t));
+            }};
+        }
+
+        macro_rules! compress {
+            ($words:expr, $a:ident, $b:ident, $c:ident, $d:ident) => {{
+                let words = $words;
+                let initial = [$a, $b, $c, $d];
+                step!(f, $a, $b, $c, $d, words, 0, 0, 7);
+                step!(f, $d, $a, $b, $c, words, 1, 1, 12);
+                step!(f, $c, $d, $a, $b, words, 2, 2, 17);
+                step!(f, $b, $c, $d, $a, words, 3, 3, 22);
+                step!(f, $a, $b, $c, $d, words, 4, 4, 7);
+                step!(f, $d, $a, $b, $c, words, 5, 5, 12);
+                step!(f, $c, $d, $a, $b, words, 6, 6, 17);
+                step!(f, $b, $c, $d, $a, words, 7, 7, 22);
+                step!(f, $a, $b, $c, $d, words, 8, 8, 7);
+                step!(f, $d, $a, $b, $c, words, 9, 9, 12);
+                step!(f, $c, $d, $a, $b, words, 10, 10, 17);
+                step!(f, $b, $c, $d, $a, words, 11, 11, 22);
+                step!(f, $a, $b, $c, $d, words, 12, 12, 7);
+                step!(f, $d, $a, $b, $c, words, 13, 13, 12);
+                step!(f, $c, $d, $a, $b, words, 14, 14, 17);
+                step!(f, $b, $c, $d, $a, words, 15, 15, 22);
+                step!(g, $a, $b, $c, $d, words, 1, 16, 5);
+                step!(g, $d, $a, $b, $c, words, 6, 17, 9);
+                step!(g, $c, $d, $a, $b, words, 11, 18, 14);
+                step!(g, $b, $c, $d, $a, words, 0, 19, 20);
+                step!(g, $a, $b, $c, $d, words, 5, 20, 5);
+                step!(g, $d, $a, $b, $c, words, 10, 21, 9);
+                step!(g, $c, $d, $a, $b, words, 15, 22, 14);
+                step!(g, $b, $c, $d, $a, words, 4, 23, 20);
+                step!(g, $a, $b, $c, $d, words, 9, 24, 5);
+                step!(g, $d, $a, $b, $c, words, 14, 25, 9);
+                step!(g, $c, $d, $a, $b, words, 3, 26, 14);
+                step!(g, $b, $c, $d, $a, words, 8, 27, 20);
+                step!(g, $a, $b, $c, $d, words, 13, 28, 5);
+                step!(g, $d, $a, $b, $c, words, 2, 29, 9);
+                step!(g, $c, $d, $a, $b, words, 7, 30, 14);
+                step!(g, $b, $c, $d, $a, words, 12, 31, 20);
+                step!(h, $a, $b, $c, $d, words, 5, 32, 4);
+                step!(h, $d, $a, $b, $c, words, 8, 33, 11);
+                step!(h, $c, $d, $a, $b, words, 11, 34, 16);
+                step!(h, $b, $c, $d, $a, words, 14, 35, 23);
+                step!(h, $a, $b, $c, $d, words, 1, 36, 4);
+                step!(h, $d, $a, $b, $c, words, 4, 37, 11);
+                step!(h, $c, $d, $a, $b, words, 7, 38, 16);
+                step!(h, $b, $c, $d, $a, words, 10, 39, 23);
+                step!(h, $a, $b, $c, $d, words, 13, 40, 4);
+                step!(h, $d, $a, $b, $c, words, 0, 41, 11);
+                step!(h, $c, $d, $a, $b, words, 3, 42, 16);
+                step!(h, $b, $c, $d, $a, words, 6, 43, 23);
+                step!(h, $a, $b, $c, $d, words, 9, 44, 4);
+                step!(h, $d, $a, $b, $c, words, 12, 45, 11);
+                step!(h, $c, $d, $a, $b, words, 15, 46, 16);
+                step!(h, $b, $c, $d, $a, words, 2, 47, 23);
+                step!(i, $a, $b, $c, $d, words, 0, 48, 6);
+                step!(i, $d, $a, $b, $c, words, 7, 49, 10);
+                step!(i, $c, $d, $a, $b, words, 14, 50, 15);
+                step!(i, $b, $c, $d, $a, words, 5, 51, 21);
+                step!(i, $a, $b, $c, $d, words, 12, 52, 6);
+                step!(i, $d, $a, $b, $c, words, 3, 53, 10);
+                step!(i, $c, $d, $a, $b, words, 10, 54, 15);
+                step!(i, $b, $c, $d, $a, words, 1, 55, 21);
+                step!(i, $a, $b, $c, $d, words, 8, 56, 6);
+                step!(i, $d, $a, $b, $c, words, 15, 57, 10);
+                step!(i, $c, $d, $a, $b, words, 6, 58, 15);
+                step!(i, $b, $c, $d, $a, words, 13, 59, 21);
+                step!(i, $a, $b, $c, $d, words, 4, 60, 6);
+                step!(i, $d, $a, $b, $c, words, 11, 61, 10);
+                step!(i, $c, $d, $a, $b, words, 2, 62, 15);
+                step!(i, $b, $c, $d, $a, words, 9, 63, 21);
+                $a = _mm512_add_epi32(initial[0], $a);
+                $b = _mm512_add_epi32(initial[1], $b);
+                $c = _mm512_add_epi32(initial[2], $c);
+                $d = _mm512_add_epi32(initial[3], $d);
+            }};
+        }
+
+        let len = inputs[0].len();
+        let [mut a, mut b, mut c, mut d] = load_md5_state16!(streams, 0);
+        let full_blocks = len / 64;
+
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words = load_transposed!(blocks);
+            compress!(words, a, b, c, d);
+        }
+
+        store_md5_state16!(streams, 0, a, b, c, d);
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx512_dual_md5_state_kernel(
+        avx512: Avx512,
+        streams: &mut [Md5State],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(inputs.len(), 32);
+        debug_assert_eq!(streams.len(), 32);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+
+        macro_rules! transpose16 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let pair_lo =
+                    _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+                let pair_hi =
+                    _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+                let quad_lo =
+                    _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
+                let quad_hi =
+                    _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+                let oct_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+                let oct_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+                let half_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+                let half_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+
+                let mut s1 = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    let a = rows[pair * 2];
+                    let b = rows[pair * 2 + 1];
+                    s1[pair * 2] = _mm512_permutex2var_epi32(a, pair_lo, b);
+                    s1[pair * 2 + 1] = _mm512_permutex2var_epi32(a, pair_hi, b);
+                }
+
+                let mut s2 = [_mm512_setzero_si512(); 16];
+                for group in 0..4 {
+                    let base = group * 4;
+                    s2[base] = _mm512_permutex2var_epi32(s1[base], quad_lo, s1[base + 2]);
+                    s2[base + 1] = _mm512_permutex2var_epi32(s1[base], quad_hi, s1[base + 2]);
+                    s2[base + 2] = _mm512_permutex2var_epi32(s1[base + 1], quad_lo, s1[base + 3]);
+                    s2[base + 3] = _mm512_permutex2var_epi32(s1[base + 1], quad_hi, s1[base + 3]);
+                }
+
+                let mut s3 = [_mm512_setzero_si512(); 16];
+                for half in 0..2 {
+                    let left = half * 8;
+                    let right = left + 4;
+                    for quarter in 0..4 {
+                        s3[left + quarter * 2] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_lo,
+                            s2[right + quarter],
+                        );
+                        s3[left + quarter * 2 + 1] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_hi,
+                            s2[right + quarter],
+                        );
+                    }
+                }
+
+                let mut out = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    out[pair * 2] = _mm512_permutex2var_epi32(s3[pair], half_lo, s3[8 + pair]);
+                    out[pair * 2 + 1] = _mm512_permutex2var_epi32(s3[pair], half_hi, s3[8 + pair]);
+                }
+                out
+            }};
+        }
+
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut rows = [_mm512_setzero_si512(); 16];
+                for lane in 0..16 {
+                    // SAFETY: each entry is a full 64-byte MD5 block and the
+                    // unaligned AVX-512 load reads exactly those 64 bytes.
+                    rows[lane] = unsafe { _mm512_loadu_si512(blocks[lane].as_ptr().cast()) };
+                }
+                transpose16!(rows)
+            }};
+        }
+
+        macro_rules! mix {
+            (f, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0xca>($x, $y, $z)
+            };
+            (g, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0xe4>($x, $y, $z)
+            };
+            (h, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0x96>($x, $y, $z)
+            };
+            (i, $x:expr, $y:expr, $z:expr) => {
+                _mm512_ternarylogic_epi32::<0x39>($x, $y, $z)
+            };
+        }
+
+        macro_rules! step2 {
+            ($which:ident, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $a1:ident, $b1:ident, $c1:ident, $d1:ident, $words0:ident, $words1:ident, $word:expr, $round:expr, $shift:literal) => {{
+                let mixed0 = mix!($which, $b0, $c0, $d0);
+                let mixed1 = mix!($which, $b1, $c1, $d1);
+                let mut t0 = _mm512_add_epi32($a0, mixed0);
+                let mut t1 = _mm512_add_epi32($a1, mixed1);
+                let key = _mm512_set1_epi32(K[$round] as i32);
+                t0 = _mm512_add_epi32(t0, key);
+                t1 = _mm512_add_epi32(t1, key);
+                t0 = _mm512_add_epi32(t0, $words0[$word]);
+                t1 = _mm512_add_epi32(t1, $words1[$word]);
+                $a0 = _mm512_add_epi32($b0, _mm512_rol_epi32::<$shift>(t0));
+                $a1 = _mm512_add_epi32($b1, _mm512_rol_epi32::<$shift>(t1));
+            }};
+        }
+
+        macro_rules! compress2 {
+            ($words0:expr, $a0:ident, $b0:ident, $c0:ident, $d0:ident, $words1:expr, $a1:ident, $b1:ident, $c1:ident, $d1:ident) => {{
+                let words0 = $words0;
+                let words1 = $words1;
+                let initial0 = [$a0, $b0, $c0, $d0];
+                let initial1 = [$a1, $b1, $c1, $d1];
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 0, 0, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 1, 1, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 2, 2, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 3, 3, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 4, 4, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 5, 5, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 6, 6, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 7, 7, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 8, 8, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 9, 9, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 10, 10, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 11, 11, 22
+                );
+                step2!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 12, 12, 7
+                );
+                step2!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 13, 13, 12
+                );
+                step2!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 14, 14, 17
+                );
+                step2!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 15, 15, 22
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 1, 16, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 6, 17, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 11, 18, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 0, 19, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 5, 20, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 10, 21, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 15, 22, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 4, 23, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 9, 24, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 14, 25, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 3, 26, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 8, 27, 20
+                );
+                step2!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 13, 28, 5
+                );
+                step2!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 2, 29, 9
+                );
+                step2!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 7, 30, 14
+                );
+                step2!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 12, 31, 20
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 5, 32, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 8, 33, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 11, 34, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 14, 35, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 1, 36, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 4, 37, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 7, 38, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 10, 39, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 13, 40, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 0, 41, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 3, 42, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 6, 43, 23
+                );
+                step2!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 9, 44, 4
+                );
+                step2!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 12, 45, 11
+                );
+                step2!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 15, 46, 16
+                );
+                step2!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 2, 47, 23
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 0, 48, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 7, 49, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 14, 50, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 5, 51, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 12, 52, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 3, 53, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 10, 54, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 1, 55, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 8, 56, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 15, 57, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 6, 58, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 13, 59, 21
+                );
+                step2!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, words0, words1, 4, 60, 6
+                );
+                step2!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, words0, words1, 11, 61, 10
+                );
+                step2!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, words0, words1, 2, 62, 15
+                );
+                step2!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, words0, words1, 9, 63, 21
+                );
+                $a0 = _mm512_add_epi32(initial0[0], $a0);
+                $b0 = _mm512_add_epi32(initial0[1], $b0);
+                $c0 = _mm512_add_epi32(initial0[2], $c0);
+                $d0 = _mm512_add_epi32(initial0[3], $d0);
+                $a1 = _mm512_add_epi32(initial1[0], $a1);
+                $b1 = _mm512_add_epi32(initial1[1], $b1);
+                $c1 = _mm512_add_epi32(initial1[2], $c1);
+                $d1 = _mm512_add_epi32(initial1[3], $d1);
+            }};
+        }
+
+        let len = inputs[0].len();
+        let [mut a0, mut b0, mut c0, mut d0] = load_md5_state16!(streams, 0);
+        let [mut a1, mut b1, mut c1, mut d1] = load_md5_state16!(streams, 16);
+        let full_blocks = len / 64;
+
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks0: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks1: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane + 16][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words0 = load_transposed!(blocks0);
+            let words1 = load_transposed!(blocks1);
+            compress2!(words0, a0, b0, c0, d0, words1, a1, b1, c1, d1);
+        }
+
+        store_md5_state16!(streams, 0, a0, b0, c0, d0);
+        store_md5_state16!(streams, 16, a1, b1, c1, d1);
+    }
+);
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+fearless_simd::kernel!(
+    #[inline]
+    fn compress_equal_len_avx512_triple_md5_state_kernel(
+        avx512: Avx512,
+        streams: &mut [Md5State],
+        inputs: &[&[u8]],
+    ) {
+        debug_assert_eq!(inputs.len(), 48);
+        debug_assert_eq!(streams.len(), 48);
+        debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+        let _ = avx512;
+
+        macro_rules! transpose16 {
+            ($rows:expr) => {{
+                let rows = $rows;
+                let pair_lo =
+                    _mm512_setr_epi32(0, 16, 1, 17, 2, 18, 3, 19, 4, 20, 5, 21, 6, 22, 7, 23);
+                let pair_hi =
+                    _mm512_setr_epi32(8, 24, 9, 25, 10, 26, 11, 27, 12, 28, 13, 29, 14, 30, 15, 31);
+                let quad_lo =
+                    _mm512_setr_epi32(0, 1, 16, 17, 2, 3, 18, 19, 4, 5, 20, 21, 6, 7, 22, 23);
+                let quad_hi =
+                    _mm512_setr_epi32(8, 9, 24, 25, 10, 11, 26, 27, 12, 13, 28, 29, 14, 15, 30, 31);
+                let oct_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 16, 17, 18, 19, 4, 5, 6, 7, 20, 21, 22, 23);
+                let oct_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 24, 25, 26, 27, 12, 13, 14, 15, 28, 29, 30, 31);
+                let half_lo =
+                    _mm512_setr_epi32(0, 1, 2, 3, 4, 5, 6, 7, 16, 17, 18, 19, 20, 21, 22, 23);
+                let half_hi =
+                    _mm512_setr_epi32(8, 9, 10, 11, 12, 13, 14, 15, 24, 25, 26, 27, 28, 29, 30, 31);
+                let mut s1 = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    let a = rows[pair * 2];
+                    let b = rows[pair * 2 + 1];
+                    s1[pair * 2] = _mm512_permutex2var_epi32(a, pair_lo, b);
+                    s1[pair * 2 + 1] = _mm512_permutex2var_epi32(a, pair_hi, b);
+                }
+                let mut s2 = [_mm512_setzero_si512(); 16];
+                for group in 0..4 {
+                    let base = group * 4;
+                    s2[base] = _mm512_permutex2var_epi32(s1[base], quad_lo, s1[base + 2]);
+                    s2[base + 1] = _mm512_permutex2var_epi32(s1[base], quad_hi, s1[base + 2]);
+                    s2[base + 2] = _mm512_permutex2var_epi32(s1[base + 1], quad_lo, s1[base + 3]);
+                    s2[base + 3] = _mm512_permutex2var_epi32(s1[base + 1], quad_hi, s1[base + 3]);
+                }
+                let mut s3 = [_mm512_setzero_si512(); 16];
+                for half in 0..2 {
+                    let left = half * 8;
+                    let right = left + 4;
+                    for quarter in 0..4 {
+                        s3[left + quarter * 2] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_lo,
+                            s2[right + quarter],
+                        );
+                        s3[left + quarter * 2 + 1] = _mm512_permutex2var_epi32(
+                            s2[left + quarter],
+                            oct_hi,
+                            s2[right + quarter],
+                        );
+                    }
+                }
+                let mut out = [_mm512_setzero_si512(); 16];
+                for pair in 0..8 {
+                    out[pair * 2] = _mm512_permutex2var_epi32(s3[pair], half_lo, s3[8 + pair]);
+                    out[pair * 2 + 1] = _mm512_permutex2var_epi32(s3[pair], half_hi, s3[8 + pair]);
+                }
+                out
+            }};
+        }
+        macro_rules! load_transposed {
+            ($blocks:expr) => {{
+                let blocks = $blocks;
+                let mut rows = [_mm512_setzero_si512(); 16];
+                for lane in 0..16 {
+                    rows[lane] = unsafe { _mm512_loadu_si512(blocks[lane].as_ptr().cast()) };
+                }
+                transpose16!(rows)
+            }};
+        }
+        macro_rules! mix {
+            (f,$x:expr,$y:expr,$z:expr) => {
+                _mm512_ternarylogic_epi32::<0xca>($x, $y, $z)
+            };
+            (g,$x:expr,$y:expr,$z:expr) => {
+                _mm512_ternarylogic_epi32::<0xe4>($x, $y, $z)
+            };
+            (h,$x:expr,$y:expr,$z:expr) => {
+                _mm512_ternarylogic_epi32::<0x96>($x, $y, $z)
+            };
+            (i,$x:expr,$y:expr,$z:expr) => {
+                _mm512_ternarylogic_epi32::<0x39>($x, $y, $z)
+            };
+        }
+        macro_rules! step3 {
+            ($which:ident,$a0:ident,$b0:ident,$c0:ident,$d0:ident,$a1:ident,$b1:ident,$c1:ident,$d1:ident,$a2:ident,$b2:ident,$c2:ident,$d2:ident,$w0:ident,$w1:ident,$w2:ident,$word:expr,$round:expr,$shift:literal) => {{
+                let key = _mm512_set1_epi32(K[$round] as i32);
+                let mut t0 = _mm512_add_epi32($a0, mix!($which, $b0, $c0, $d0));
+                let mut t1 = _mm512_add_epi32($a1, mix!($which, $b1, $c1, $d1));
+                let mut t2 = _mm512_add_epi32($a2, mix!($which, $b2, $c2, $d2));
+                t0 = _mm512_add_epi32(_mm512_add_epi32(t0, key), $w0[$word]);
+                t1 = _mm512_add_epi32(_mm512_add_epi32(t1, key), $w1[$word]);
+                t2 = _mm512_add_epi32(_mm512_add_epi32(t2, key), $w2[$word]);
+                $a0 = _mm512_add_epi32($b0, _mm512_rol_epi32::<$shift>(t0));
+                $a1 = _mm512_add_epi32($b1, _mm512_rol_epi32::<$shift>(t1));
+                $a2 = _mm512_add_epi32($b2, _mm512_rol_epi32::<$shift>(t2));
+            }};
+        }
+        macro_rules! compress3 {
+            ($words0:expr,$a0:ident,$b0:ident,$c0:ident,$d0:ident,$words1:expr,$a1:ident,$b1:ident,$c1:ident,$d1:ident,$words2:expr,$a2:ident,$b2:ident,$c2:ident,$d2:ident) => {{
+                let words0 = $words0;
+                let words1 = $words1;
+                let words2 = $words2;
+                let initial0 = [$a0, $b0, $c0, $d0];
+                let initial1 = [$a1, $b1, $c1, $d1];
+                let initial2 = [$a2, $b2, $c2, $d2];
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 0, 0, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 1, 1, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 2, 2, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 3, 3, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 4, 4, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 5, 5, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 6, 6, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 7, 7, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 8, 8, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 9, 9, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 10, 10, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 11, 11, 22
+                );
+                step3!(
+                    f, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 12, 12, 7
+                );
+                step3!(
+                    f, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 13, 13, 12
+                );
+                step3!(
+                    f, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 14, 14, 17
+                );
+                step3!(
+                    f, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 15, 15, 22
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 1, 16, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 6, 17, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 11, 18, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 0, 19, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 5, 20, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 10, 21, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 15, 22, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 4, 23, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 9, 24, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 14, 25, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 3, 26, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 8, 27, 20
+                );
+                step3!(
+                    g, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 13, 28, 5
+                );
+                step3!(
+                    g, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 2, 29, 9
+                );
+                step3!(
+                    g, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 7, 30, 14
+                );
+                step3!(
+                    g, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 12, 31, 20
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 5, 32, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 8, 33, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 11, 34, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 14, 35, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 1, 36, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 4, 37, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 7, 38, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 10, 39, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 13, 40, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 0, 41, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 3, 42, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 6, 43, 23
+                );
+                step3!(
+                    h, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 9, 44, 4
+                );
+                step3!(
+                    h, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 12, 45, 11
+                );
+                step3!(
+                    h, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 15, 46, 16
+                );
+                step3!(
+                    h, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 2, 47, 23
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 0, 48, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 7, 49, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 14, 50, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 5, 51, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 12, 52, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 3, 53, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 10, 54, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 1, 55, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 8, 56, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 15, 57, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 6, 58, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 13, 59, 21
+                );
+                step3!(
+                    i, $a0, $b0, $c0, $d0, $a1, $b1, $c1, $d1, $a2, $b2, $c2, $d2, words0, words1,
+                    words2, 4, 60, 6
+                );
+                step3!(
+                    i, $d0, $a0, $b0, $c0, $d1, $a1, $b1, $c1, $d2, $a2, $b2, $c2, words0, words1,
+                    words2, 11, 61, 10
+                );
+                step3!(
+                    i, $c0, $d0, $a0, $b0, $c1, $d1, $a1, $b1, $c2, $d2, $a2, $b2, words0, words1,
+                    words2, 2, 62, 15
+                );
+                step3!(
+                    i, $b0, $c0, $d0, $a0, $b1, $c1, $d1, $a1, $b2, $c2, $d2, $a2, words0, words1,
+                    words2, 9, 63, 21
+                );
+                $a0 = _mm512_add_epi32(initial0[0], $a0);
+                $b0 = _mm512_add_epi32(initial0[1], $b0);
+                $c0 = _mm512_add_epi32(initial0[2], $c0);
+                $d0 = _mm512_add_epi32(initial0[3], $d0);
+                $a1 = _mm512_add_epi32(initial1[0], $a1);
+                $b1 = _mm512_add_epi32(initial1[1], $b1);
+                $c1 = _mm512_add_epi32(initial1[2], $c1);
+                $d1 = _mm512_add_epi32(initial1[3], $d1);
+                $a2 = _mm512_add_epi32(initial2[0], $a2);
+                $b2 = _mm512_add_epi32(initial2[1], $b2);
+                $c2 = _mm512_add_epi32(initial2[2], $c2);
+                $d2 = _mm512_add_epi32(initial2[3], $d2);
+            }};
+        }
+        let len = inputs[0].len();
+        let [mut a0, mut b0, mut c0, mut d0] = load_md5_state16!(streams, 0);
+        let [mut a1, mut b1, mut c1, mut d1] = load_md5_state16!(streams, 16);
+        let [mut a2, mut b2, mut c2, mut d2] = load_md5_state16!(streams, 32);
+        let full_blocks = len / 64;
+        for block_index in 0..full_blocks {
+            let offset = block_index * 64;
+            let blocks0: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks1: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane + 16][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let blocks2: [&[u8; 64]; 16] = core::array::from_fn(|lane| {
+                inputs[lane + 32][offset..offset + 64]
+                    .try_into()
+                    .expect("full MD5 block")
+            });
+            let words0 = load_transposed!(blocks0);
+            let words1 = load_transposed!(blocks1);
+            let words2 = load_transposed!(blocks2);
+            compress3!(
+                words0, a0, b0, c0, d0, words1, a1, b1, c1, d1, words2, a2, b2, c2, d2
+            );
+        }
+        store_md5_state16!(streams, 0, a0, b0, c0, d0);
+        store_md5_state16!(streams, 16, a1, b1, c1, d1);
+        store_md5_state16!(streams, 32, a2, b2, c2, d2);
+    }
+);
+
+/// Compress block-aligned lockstep fragments directly from `Md5State`.
+///
+/// This avoids copying chaining states through a temporary contiguous array
+/// on the incremental equal-chunk hot path.
+#[inline]
+pub(crate) fn compress_md5_states_blocks_validated_with_level(
+    level: Level,
+    streams: &mut [Md5State],
+    inputs: &[&[u8]],
+) {
+    debug_assert_eq!(streams.len(), inputs.len());
+    debug_assert!(!inputs.is_empty());
+    debug_assert!(inputs[0].len().is_multiple_of(64));
+    debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if streams.len() == 48
+            && let Some(avx512) = level.as_avx512()
+        {
+            compress_equal_len_avx512_triple_md5_state_kernel(avx512, streams, inputs);
+            return;
+        }
+        if streams.len() == 32
+            && let Some(avx512) = level.as_avx512()
+        {
+            compress_equal_len_avx512_dual_md5_state_kernel(avx512, streams, inputs);
+            return;
+        }
+        if streams.len() == 24
+            && let Some(avx2) = level.as_avx2()
+        {
+            compress_equal_len_avx2_triple_md5_state_kernel(avx2, streams, inputs);
+            return;
+        }
+        if streams.len() == 16 {
+            if let Some(avx512) = level.as_avx512() {
+                compress_equal_len_avx512_md5_state_kernel(avx512, streams, inputs);
+                return;
+            }
+            if let Some(avx2) = level.as_avx2() {
+                compress_equal_len_avx2_dual_md5_state_kernel(avx2, streams, inputs);
+                return;
+            }
+        }
+        if streams.len() == 8
+            && let Some(avx2) = level.as_avx2()
+        {
+            compress_equal_len_avx2_md5_state_kernel(avx2, streams, inputs);
+            return;
+        }
+    }
+
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    if streams.len() <= 4
+        && let Some(sse2) = level.as_sse2()
+    {
+        compress_md5_states_inner(sse2, streams, inputs);
+        return;
+    }
+
+    // Portable and under-filled groups keep the compact temporary-state path.
+    let mut states = [[0u32; 4]; 48];
+    for (lane, stream) in streams.iter().enumerate() {
+        states[lane] = stream.state;
+    }
+    compress_many_blocks_with_level(level, &mut states[..streams.len()], inputs);
+    for (lane, stream) in streams.iter_mut().enumerate() {
+        stream.state = states[lane];
+    }
+}
+
 /// Compress equal-length, block-aligned message fragments starting from
 /// caller-supplied MD5 states. This is the primitive used by incremental
 /// multi-stream hashing; unlike the one-shot kernels it performs no padding.
@@ -5604,11 +9629,33 @@ pub(crate) fn compress_many_blocks_with_level(
     // AVX-512 lanes, for example.
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
-        if states.len() == 16
+        if states.len() == 48
             && let Some(avx512) = level.as_avx512()
         {
-            compress_equal_len_avx512_state_kernel(avx512, states, inputs);
+            compress_equal_len_avx512_triple_state_kernel(avx512, states, inputs);
             return;
+        }
+        if states.len() == 32
+            && let Some(avx512) = level.as_avx512()
+        {
+            compress_equal_len_avx512_dual_state_kernel(avx512, states, inputs);
+            return;
+        }
+        if states.len() == 24
+            && let Some(avx2) = level.as_avx2()
+        {
+            compress_equal_len_avx2_triple_state_kernel(avx2, states, inputs);
+            return;
+        }
+        if states.len() == 16 {
+            if let Some(avx512) = level.as_avx512() {
+                compress_equal_len_avx512_state_kernel(avx512, states, inputs);
+                return;
+            }
+            if let Some(avx2) = level.as_avx2() {
+                compress_equal_len_avx2_dual_state_kernel(avx2, states, inputs);
+                return;
+            }
         }
         if states.len() <= 4
             && let Some(sse2) = level.as_sse2()
@@ -5631,6 +9678,45 @@ pub(crate) fn compress_many_blocks_with_level(
     }
 
     dispatch!(level, simd => compress_many_blocks_inner(simd, states, inputs));
+}
+
+#[inline(always)]
+fn compress_md5_states_inner<SIMD: Simd>(simd: SIMD, streams: &mut [Md5State], inputs: &[&[u8]]) {
+    debug_assert_eq!(streams.len(), inputs.len());
+    debug_assert!(streams.len() <= SIMD::u32s::N);
+    debug_assert!(
+        inputs
+            .first()
+            .is_none_or(|first| inputs.iter().all(|input| input.len() == first.len()))
+    );
+    debug_assert!(
+        inputs
+            .first()
+            .is_none_or(|input| input.len().is_multiple_of(64))
+    );
+
+    let active = streams.len();
+    let mut vector_state: [SIMD::u32s; 4] = core::array::from_fn(|word| {
+        SIMD::u32s::from_fn(simd, |lane| {
+            if lane < active {
+                streams[lane].state[word]
+            } else {
+                STATE_INIT[word]
+            }
+        })
+    });
+
+    let block_count = inputs[0].len() / 64;
+    for block_index in 0..block_count {
+        let words = full_block_words(simd, inputs, active, block_index);
+        compress_words::<SIMD>(&mut vector_state, &words);
+    }
+
+    for lane in 0..active {
+        for (word, vector) in vector_state.iter().enumerate() {
+            streams[lane].state[word] = vector[lane];
+        }
+    }
 }
 
 #[inline(always)]
@@ -6697,11 +10783,41 @@ pub(crate) fn hash_many_with_level(level: Level, inputs: &[&[u8]], outputs: &mut
     dispatch!(level, simd => hash_many_inner(simd, inputs, outputs));
 }
 
-#[inline(always)]
-fn lanes_inner<SIMD: Simd>(_simd: SIMD) -> usize {
-    <SIMD::u32s as SimdBase<SIMD>>::N
-}
+pub(crate) const fn lanes_with_level(level: Level) -> usize {
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        match level {
+            Level::Avx512(_) => 16,
+            Level::Avx2(_) => 8,
+            Level::Sse4_2(_) | Level::Sse2(_) => 4,
+            _ => 1,
+        }
+    }
 
-pub(crate) fn lanes_with_level(level: Level) -> usize {
-    dispatch!(level, simd => lanes_inner(simd))
+    #[cfg(target_arch = "aarch64")]
+    {
+        match level {
+            Level::Neon(_) => 4,
+            _ => 1,
+        }
+    }
+
+    #[cfg(all(target_arch = "wasm32", target_feature = "simd128"))]
+    {
+        match level {
+            Level::WasmSimd128(_) => 4,
+            _ => 1,
+        }
+    }
+
+    #[cfg(not(any(
+        target_arch = "x86",
+        target_arch = "x86_64",
+        target_arch = "aarch64",
+        all(target_arch = "wasm32", target_feature = "simd128")
+    )))]
+    {
+        let _ = level;
+        1
+    }
 }
