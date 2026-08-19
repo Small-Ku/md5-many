@@ -10,6 +10,7 @@ A single MD5 stream has a dependency between consecutive 64-byte blocks, so wide
 
 - `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compressor; `md5()` and the streaming `Md5` path can additionally select an XMM-width AVX-512VL compressor on supported Intel CPUs. Little-endian AArch64 uses a hand-scheduled integer compressor. Other targets retain the portable Rust compressor.
 - `Md5Many`: batches independent messages into SIMD lanes and chooses a scheduler appropriate to the detected CPU and workload.
+- `Md5State` + `Md5Many::update_many`: keeps many messages alive across repeated chunked updates, compacts complete blocks into SIMD lanes, and batches final padding without requiring allocation inside the crate.
 
 On x86 the specialized backend currently includes:
 
@@ -65,6 +66,32 @@ hasher.hash_many(&inputs, &mut outputs);
 
 Construct `Md5Many` once and reuse it when possible; this avoids repeating runtime CPU-feature detection.
 
+### Incremental multi-stream hashing
+
+Use `Md5State` when several independent messages arrive over time rather than as complete slices:
+
+```rust
+use md5_many::{Md5Many, Md5State};
+
+let engine = Md5Many::new();
+let mut states = [Md5State::new(); 4];
+let mut outputs = [[0u8; 16]; 4];
+
+engine.update_many(
+    &mut states,
+    &[b"alpha ", b"beta ", b"gamma ", b"delta "],
+);
+engine.update_many(
+    &mut states,
+    &[b"one", b"two", b"three", b"four"],
+);
+engine.finalize_many(&states, &mut outputs);
+```
+
+`update_many` accepts a different chunk length for every stream. Partial 64-byte blocks stay buffered in each `Md5State`; complete blocks are compacted into the available SIMD lanes. `finalize_many` does not consume or reset the states, so it can be used as a checkpoint before more data is appended. `Md5State::update` and `Md5State::finalize` are also available for one incremental stream.
+
+The incremental path currently batches stateful compression at the backend's native SIMD lane width. The wider x86 dual/triple whole-stream interleaving used by `hash_many` remains specific to the one-shot path, so incremental peak-throughput tuning is separate from the initial stateful API.
+
 ### RustCrypto `digest` compatibility
 
 The default `digest` feature exposes `md5_many::Md5`:
@@ -109,6 +136,7 @@ The Criterion suite contains:
 - lane-fill crossover measurements;
 - partial-batch scaling around native, dual, and triple scheduler boundaries;
 - short mixed-length padding-boundary workloads;
+- incremental multi-stream workloads using 32-byte and 4 KiB update chunks;
 - deliberately skewed under-filled mixed batches, including a two-message long partition, to catch divergent-tail and low-occupancy regressions;
 - one-, two-, and three-native-batch mixed workloads around 64 KiB;
 - batch scaling through eight native SIMD groups;

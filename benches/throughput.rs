@@ -1,6 +1,6 @@
 use criterion::{BenchmarkId, Criterion, Throughput, criterion_group, criterion_main};
 use md5::{Digest as _, Md5 as RustCryptoMd5};
-use md5_many::{Md5 as Md5ManyStreaming, Md5Many, md5};
+use md5_many::{Md5 as Md5ManyStreaming, Md5Many, Md5State, md5};
 use std::hint::black_box;
 
 fn bench_single(c: &mut Criterion) {
@@ -52,6 +52,43 @@ fn bench_many(c: &mut Criterion) {
                 })
             },
         );
+        group.finish();
+    }
+}
+
+fn bench_incremental_many(c: &mut Criterion) {
+    let engine = Md5Many::new();
+    let lanes = engine.lanes();
+    let size = 64 * 1024usize;
+    let storage: Vec<Vec<u8>> = (0..lanes)
+        .map(|lane| vec![(lane as u8).wrapping_mul(61); size])
+        .collect();
+    let mut states = vec![Md5State::new(); lanes];
+    let mut outputs = vec![[0u8; 16]; lanes];
+
+    for &chunk_size in &[32usize, 4 * 1024] {
+        let chunks: Vec<Vec<&[u8]>> = (0..size)
+            .step_by(chunk_size)
+            .map(|start| {
+                let end = core::cmp::min(start + chunk_size, size);
+                storage.iter().map(|message| &message[start..end]).collect()
+            })
+            .collect();
+
+        let mut group = c.benchmark_group(format!(
+            "incremental-{lanes}x64KiB-{chunk_size}B-chunks"
+        ));
+        group.throughput(Throughput::Bytes((lanes * size) as u64));
+        group.bench_function("md5-many", |b| {
+            b.iter(|| {
+                states.fill(Md5State::new());
+                for inputs in &chunks {
+                    engine.update_many(black_box(&mut states), black_box(inputs));
+                }
+                engine.finalize_many(black_box(&states), black_box(&mut outputs));
+                black_box(&outputs);
+            })
+        });
         group.finish();
     }
 }
@@ -382,6 +419,7 @@ criterion_group!(
     benches,
     bench_single,
     bench_many,
+    bench_incremental_many,
     bench_lane_fill,
     bench_mixed_short,
     bench_skewed_partial,
