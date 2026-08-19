@@ -75,6 +75,50 @@ jobs:
       - name: Check no_std library at MSRV
         run: cargo check --locked --lib --no-default-features --features libm,digest
 
+  backend-probe:
+    name: Backend probe (${{ matrix.arch }})
+    needs: [test, quality, msrv]
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - arch: x86_64
+            runner: ubuntu-24.04
+            filter: backend-x86
+          - arch: aarch64
+            runner: ubuntu-24.04-arm
+            filter: backend-aarch64
+    runs-on: ${{ matrix.runner }}
+    timeout-minutes: 30
+    env:
+      CARGO_INCREMENTAL: 0
+    steps:
+      - uses: actions/checkout@v5
+      - name: Install Rust ${{ env.RUST_VERSION }}
+        run: |
+          rustup toolchain install "$RUST_VERSION" --profile minimal
+          rustup default "$RUST_VERSION"
+          rustc -Vv
+      - name: Fingerprint runner
+        run: .github/scripts/fingerprint-runner.sh backend-probe-runner.txt
+      - name: Backend candidate correctness
+        run: cargo test --locked --features bench-internals
+      - name: Same-binary backend microbenchmarks
+        run: |
+          cargo bench --locked --features bench-internals --bench backends -- \
+            "${{ matrix.filter }}" --noplot 2>&1 | tee backend-probe.txt
+      - name: Upload backend probe data
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: backend-probe-${{ matrix.arch }}-${{ github.run_id }}
+          path: |
+            backend-probe-runner.txt
+            backend-probe.txt
+            target/criterion/backend-*
+          if-no-files-found: warn
+          retention-days: 14
+
   performance:
     name: Performance guard (${{ matrix.arch }})
     needs: [test, quality, msrv]
