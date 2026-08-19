@@ -367,14 +367,18 @@ may expose different ARM CPUs.
 The public one-shot path now specializes messages of at most 55 bytes as a
 single padded block. This is deliberately a framing specialization, not a
 second MD5 round implementation: it avoids constructing the generic two-block
-finalization buffer and calls the existing selected compressor once.
+finalization buffer and calls the existing selected compressor once. The
+Intel-preferred AVX-512VL one-shot path has the same compact one-block framing
+so its vector state still remains resident for the whole hash.
 
 A same-binary `backend-short-framing` comparison on the AMD EPYC 9V74 runner
-showed roughly 4-10% lower latency at representative 0-55-byte points. The
-benefit disappeared around the two-padding-block boundary, so 56-byte and
-larger messages remain on the generic framing path. A separate compact-final
-block experiment for arbitrary 64-byte-aligned inputs was also inconsistent
-and is not part of production dispatch.
+showed roughly 4-10% lower latency at representative 0-55-byte points. Forced
+AVX-512VL measurements on the same host also improved by roughly 2-7% across
+most of that range, despite AVX-512VL itself remaining the wrong single-stream
+choice on AMD Family 19h. The benefit disappeared around the two-padding-block
+boundary, so 56-byte and larger messages remain on the generic framing path. A
+separate compact-final-block experiment for arbitrary 64-byte-aligned inputs
+was inconsistent and is not part of production dispatch.
 
 ## Experiments rejected so far
 

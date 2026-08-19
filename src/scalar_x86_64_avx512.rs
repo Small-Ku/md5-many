@@ -362,6 +362,29 @@ pub(crate) unsafe fn compress_blocks(state: &mut [u32; STATE_WORDS], blocks: &[[
 
 #[target_feature(enable = "avx512f,avx512vl")]
 pub(crate) unsafe fn hash(input: &[u8]) -> [u8; 16] {
+    if input.len() <= 55 {
+        return unsafe { hash_short_one_block(input) };
+    }
+    unsafe { hash_generic(input) }
+}
+
+#[target_feature(enable = "avx512f,avx512vl")]
+unsafe fn hash_short_one_block(input: &[u8]) -> [u8; 16] {
+    debug_assert!(input.len() <= 55);
+
+    let mut block = [0u8; BLOCK_SIZE];
+    block[..input.len()].copy_from_slice(input);
+    block[input.len()] = 0x80;
+    block[56..64].copy_from_slice(&(input.len() as u64).wrapping_mul(8).to_le_bytes());
+
+    let mut vector_state = unsafe { vector_state_from_scalar(&STATE_INIT) };
+    unsafe { compress_block_vec(&mut vector_state, &block) };
+    let state = unsafe { vector_state_to_scalar(vector_state) };
+    crate::scalar::state_to_bytes(state)
+}
+
+#[target_feature(enable = "avx512f,avx512vl")]
+pub(crate) unsafe fn hash_generic(input: &[u8]) -> [u8; 16] {
     let mut vector_state = unsafe { vector_state_from_scalar(&STATE_INIT) };
     let mut chunks = input.chunks_exact(BLOCK_SIZE);
 

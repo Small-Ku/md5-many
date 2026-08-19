@@ -86,6 +86,19 @@ pub mod bench_internals {
         crate::scalar::hash_x86_nolea(input)
     }
 
+    /// Force the generic-framing x86-64 AVX-512VL single-stream backend.
+    ///
+    /// # Panics
+    ///
+    /// Panics when AVX-512F or AVX-512VL is unavailable.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn md5_x86_avx512_generic(input: &[u8]) -> Md5Digest {
+        assert!(x86_avx512_supported());
+        // SAFETY: the assertion above checks both required target features.
+        unsafe { crate::scalar_x86_64_avx512::hash_generic(input) }
+    }
+
     /// Force the x86-64 AVX-512VL single-stream backend.
     ///
     /// # Panics
