@@ -167,6 +167,31 @@ message is at least 512 B.
 CPU is measured directly. The `x86-small-batch-*` Criterion groups exist to
 protect this crossover.
 
+### Incremental eight-stream AVX2 on Intel Xeon Platinum 8370C
+
+Incremental multi-stream hashing was measured on an Intel Xeon Platinum 8370C
+(family 6, model `0x6A`) with the normal benchmark profile (`thin` LTO, one
+codegen unit). The initial stateful compressor gathered every message word
+through the generic SIMD abstraction once per block. Reusing the one-shot AVX2
+8x64-byte load/transpose and round schedule while loading and storing external
+chaining states removed that bottleneck.
+
+For eight 64 KiB streams, representative Criterion means were:
+
+| Workload | Initial incremental | Stateful AVX2 | Same-host one-shot |
+| --- | ---: | ---: | ---: |
+| 32-byte updates | 234.6 MiB/s | **1.155 GiB/s** | 2.839 GiB/s |
+| 4 KiB updates | 271.5 MiB/s | **2.569 GiB/s** | 2.839 GiB/s |
+
+The 4 KiB streaming workload therefore reaches about **90%** of one-shot
+throughput on this host. The remaining 32-byte gap is dominated by per-update
+scheduling and partial-buffer handling rather than the MD5 compression loop.
+
+**Implementation consequence:** keep equal eight-stream block-aligned updates
+inside one AVX2 kernel boundary and use the same direct load/transpose schedule
+as the one-shot path. Do not regress this path back to per-word generic lane
+gathers.
+
 ## Low-occupancy AMD family 19h scheduling
 
 Sparse SIMD is not always the best way to hash two or three independent
