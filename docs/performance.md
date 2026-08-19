@@ -380,6 +380,34 @@ boundary, so 56-byte and larger messages remain on the generic framing path. A
 separate compact-final-block experiment for arbitrary 64-byte-aligned inputs
 was inconsistent and is not part of production dispatch.
 
+### x86 one-shot dispatch hoisting
+
+The x86 one-shot entry point now resolves the AVX-512VL-vs-NoLEA choice once
+per hash. Previously, a non-Intel/NoLEA hash resolved that choice at entry and
+then re-read the cached preference from every `compress_block` call. The direct
+NoLEA one-shot path keeps the same compressor and padding rules but removes
+that per-block dispatch load.
+
+On the AMD EPYC 9V74 host, Criterion's same-benchmark before/after comparison
+reported approximately 3.3% lower latency at 64 B, 5.1% at 1 KiB, 3.7% at
+64 KiB, and 3.0% at 1 MiB. The forced-NoLEA control in the same run showed no
+significant movement, which isolates the gain to dispatch overhead rather than
+a compressor/code-frequency change.
+
+### Backend candidates awaiting target hardware
+
+Two candidates deliberately remain behind `bench-internals` rather than
+production dispatch:
+
+- AVX-512VL digest packing replaces four low-dword scalar extracts with two XMM
+  unpacks and one 16-byte store. AMD measurements are mixed/noisy and are not a
+  valid basis for the Intel-preferred path, so `backend-x86-avx512-digest-store`
+  keeps both epilogues available for an Intel same-binary A/B.
+- AArch64 exposes forced portable and hand-scheduled GPR one-shot paths plus a
+  native four-way equal-length NEON candidate. `backend-aarch64-*` must
+  establish the single-stream winner and NEON crossover on native AArch64
+  hardware before either policy changes.
+
 ## Experiments rejected so far
 
 Keeping rejected experiments documented avoids repeating attractive but
@@ -388,6 +416,10 @@ unproductive rewrites without new evidence.
 - Single-stream `<56 B` specialized compressors removed known-zero message-word
   additions but produced only about 0.3–0.6% end-to-end improvement in tiny
   cases and essentially no broader gain.
+- Replacing the short one-shot `copy_from_slice` with hand-written
+  1/2/4/8/16-byte unaligned copy chunks did not improve 31/47-byte cases
+  consistently and regressed the 55-byte boundary, so the standard slice copy
+  remains.
 - Scalar BMI1 G/I rewrites did not materially improve the single-stream
   dependency-critical path on the measured family 19h host. BMI1 is retained
   where it helped the throughput-bound dual-GPR kernel instead.
