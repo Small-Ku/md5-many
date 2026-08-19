@@ -66,6 +66,19 @@ pub mod bench_internals {
         crate::scalar::hash_short_one_block(input)
     }
 
+    /// Force the portable Rust compressor with generic one-shot framing.
+    #[must_use]
+    pub fn md5_portable(input: &[u8]) -> Md5Digest {
+        crate::scalar::hash_portable(input)
+    }
+
+    /// Force the little-endian AArch64 GPR compressor with generic one-shot framing.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[must_use]
+    pub fn md5_aarch64_gpr(input: &[u8]) -> Md5Digest {
+        crate::scalar::hash_aarch64_gpr(input)
+    }
+
     /// Hash a non-empty block-aligned message through the compact final-block candidate.
     #[must_use]
     pub fn md5_aligned(input: &[u8]) -> Md5Digest {

@@ -100,11 +100,37 @@ fn bench_x86_single_stream(c: &mut Criterion) {
 #[cfg(not(target_arch = "x86_64"))]
 fn bench_x86_single_stream(_c: &mut Criterion) {}
 
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn bench_aarch64_single_stream(c: &mut Criterion) {
+    use md5_many::bench_internals::{md5_aarch64_gpr, md5_portable};
+
+    let data = vec![0x96u8; 1024 * 1024];
+    for &len in &[64usize, 1024, 64 * 1024, 1024 * 1024] {
+        let input = &data[..len];
+        let mut group = c.benchmark_group(format!("backend-aarch64-single-stream-{len}"));
+        group.sample_size(20);
+        group.warm_up_time(Duration::from_millis(250));
+        group.measurement_time(Duration::from_millis(750));
+        group.throughput(Throughput::Bytes(len as u64));
+        group.bench_function("portable", |b| {
+            b.iter(|| black_box(md5_portable(black_box(input))))
+        });
+        group.bench_function("gpr", |b| {
+            b.iter(|| black_box(md5_aarch64_gpr(black_box(input))))
+        });
+        group.finish();
+    }
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn bench_aarch64_single_stream(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_short_framing,
     bench_aligned_framing,
     bench_x86_avx512_short,
-    bench_x86_single_stream
+    bench_x86_single_stream,
+    bench_aarch64_single_stream
 );
 criterion_main!(benches);

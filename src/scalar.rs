@@ -236,6 +236,54 @@ pub(crate) fn hash_short_one_block(input: &[u8]) -> [u8; 16] {
 }
 
 #[cfg(feature = "bench-internals")]
+#[inline(always)]
+fn hash_with_compressor<F>(input: &[u8], mut compress: F) -> [u8; 16]
+where
+    F: FnMut(&mut [u32; 4], &[u8; 64]),
+{
+    let mut state = STATE_INIT;
+    let mut chunks = input.chunks_exact(64);
+
+    for chunk in &mut chunks {
+        let block: &[u8; 64] = chunk.try_into().expect("64-byte chunk");
+        compress(&mut state, block);
+    }
+
+    let tail = chunks.remainder();
+    let mut final_blocks = [[0u8; 64]; 2];
+    final_blocks[0][..tail.len()].copy_from_slice(tail);
+    final_blocks[0][tail.len()] = 0x80;
+
+    let bit_len = (input.len() as u64).wrapping_mul(8).to_le_bytes();
+    let used = if tail.len() <= 55 {
+        final_blocks[0][56..64].copy_from_slice(&bit_len);
+        1
+    } else {
+        final_blocks[1][56..64].copy_from_slice(&bit_len);
+        2
+    };
+
+    for block in &final_blocks[..used] {
+        compress(&mut state, block);
+    }
+    state_to_bytes(state)
+}
+
+#[cfg(feature = "bench-internals")]
+pub(crate) fn hash_portable(input: &[u8]) -> [u8; 16] {
+    hash_with_compressor(input, compress_block_portable)
+}
+
+#[cfg(all(
+    feature = "bench-internals",
+    target_arch = "aarch64",
+    target_endian = "little"
+))]
+pub(crate) fn hash_aarch64_gpr(input: &[u8]) -> [u8; 16] {
+    hash_with_compressor(input, crate::scalar_aarch64::compress_block)
+}
+
+#[cfg(feature = "bench-internals")]
 pub(crate) fn hash_aligned(input: &[u8]) -> [u8; 16] {
     assert!(!input.is_empty() && input.len().is_multiple_of(64));
 
