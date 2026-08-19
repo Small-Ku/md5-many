@@ -18,6 +18,7 @@
 extern crate std;
 
 mod consts;
+mod incremental;
 mod scalar;
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 mod scalar_aarch64;
@@ -45,6 +46,8 @@ digest::buffer_fixed!(
 
 /// A raw 128-bit MD5 digest.
 pub type Md5Digest = [u8; 16];
+
+pub use incremental::Md5State;
 
 /// Compute the MD5 digest of a single byte slice.
 ///
@@ -102,6 +105,32 @@ impl Md5Many {
     /// Panics if `outputs` is shorter than `inputs`.
     pub fn hash_many(self, inputs: &[&[u8]], outputs: &mut [Md5Digest]) {
         simd::hash_many_with_level(self.level, inputs, outputs);
+    }
+
+    /// Increment several independent MD5 streams in parallel.
+    ///
+    /// Each `inputs[i]` is appended to `states[i]`. Complete 64-byte blocks
+    /// are compacted into SIMD lanes even when chunk lengths differ, while
+    /// partial blocks remain buffered in the corresponding [`Md5State`].
+    ///
+    /// # Panics
+    ///
+    /// Panics if `states` and `inputs` have different lengths.
+    pub fn update_many(self, states: &mut [Md5State], inputs: &[&[u8]]) {
+        incremental::update_many_with_level(self.level, states, inputs);
+    }
+
+    /// Finalize several incremental MD5 streams in parallel.
+    ///
+    /// Finalization is non-destructive: the states are not modified and may
+    /// receive more data afterwards. Padding blocks are batched through the
+    /// multi-buffer compressor where profitable.
+    ///
+    /// # Panics
+    ///
+    /// Panics if `outputs` is shorter than `states`.
+    pub fn finalize_many(self, states: &[Md5State], outputs: &mut [Md5Digest]) {
+        incremental::finalize_many_with_level(self.level, states, outputs);
     }
 }
 
@@ -530,6 +559,111 @@ mod tests {
         engine.hash_many(&mixed_inputs, &mut outputs);
         for (lane, (input, output)) in mixed_inputs.iter().zip(&outputs).enumerate() {
             assert_eq!(*output, reference(input), "mixed lane={lane}");
+        }
+    }
+
+    #[test]
+    fn incremental_single_state_boundaries_match_reference() {
+        let data: [u8; 321] = core::array::from_fn(|i| (i * 37 + 11) as u8);
+        for len in 0..=data.len() {
+            let mut state = Md5State::new();
+            let split1 = core::cmp::min(len, 31);
+            let split2 = core::cmp::min(len, 97);
+            state.update(&data[..split1]);
+            state.update(&data[split1..split2]);
+            state.update(&data[split2..len]);
+            assert_eq!(state.finalize(), reference(&data[..len]), "len={len}");
+            assert_eq!(state.bytes_hashed(), len as u64);
+        }
+    }
+
+    #[cfg(any(feature = "std", target_arch = "wasm32"))]
+    #[test]
+    fn incremental_many_mixed_chunks_match_reference() {
+        let engine = Md5Many::new();
+        let storage: std::vec::Vec<std::vec::Vec<u8>> = (0..37)
+            .map(|lane| {
+                let len = (lane * 431 + 57) % 5001;
+                (0..len).map(|i| (lane * 53 + i * 19) as u8).collect()
+            })
+            .collect();
+        let mut states = std::vec![Md5State::new(); storage.len()];
+        let mut offsets = std::vec![0usize; storage.len()];
+        let mut round = 0usize;
+
+        while offsets
+            .iter()
+            .zip(&storage)
+            .any(|(&offset, message)| offset < message.len())
+        {
+            let chunks: std::vec::Vec<&[u8]> = storage
+                .iter()
+                .enumerate()
+                .map(|(lane, message)| {
+                    let start = offsets[lane];
+                    let remaining = message.len() - start;
+                    let proposed = 1 + ((round * 17 + lane * 29) % 172);
+                    let take = core::cmp::min(remaining, proposed);
+                    &message[start..start + take]
+                })
+                .collect();
+
+            engine.update_many(&mut states, &chunks);
+            for lane in 0..storage.len() {
+                offsets[lane] += chunks[lane].len();
+            }
+            round += 1;
+        }
+
+        let mut outputs = std::vec![[0u8; 16]; states.len()];
+        engine.finalize_many(&states, &mut outputs);
+        for lane in 0..storage.len() {
+            assert_eq!(
+                outputs[lane],
+                reference(&storage[lane]),
+                "mixed incremental lane={lane}"
+            );
+        }
+
+        // Finalization is a snapshot rather than a consuming operation.
+        let suffixes: std::vec::Vec<std::vec::Vec<u8>> = (0..states.len())
+            .map(|lane| std::vec![(lane as u8).wrapping_mul(7); lane % 91])
+            .collect();
+        let suffix_refs: std::vec::Vec<&[u8]> =
+            suffixes.iter().map(std::vec::Vec::as_slice).collect();
+        engine.update_many(&mut states, &suffix_refs);
+        engine.finalize_many(&states, &mut outputs);
+        for lane in 0..storage.len() {
+            let mut expected = storage[lane].clone();
+            expected.extend_from_slice(&suffixes[lane]);
+            assert_eq!(
+                outputs[lane],
+                reference(&expected),
+                "post-finalize incremental lane={lane}"
+            );
+        }
+    }
+
+    #[cfg(any(feature = "std", target_arch = "wasm32"))]
+    #[test]
+    fn incremental_many_partial_block_completion_matches_reference() {
+        let engine = Md5Many::new();
+        let storage: [[u8; 129]; 16] = core::array::from_fn(|lane| {
+            core::array::from_fn(|i| (lane * 23 + i * 41) as u8)
+        });
+        let mut states = [Md5State::new(); 16];
+
+        let first: [&[u8]; 16] = core::array::from_fn(|lane| &storage[lane][..31]);
+        engine.update_many(&mut states, &first);
+        let second: [&[u8]; 16] = core::array::from_fn(|lane| &storage[lane][31..64]);
+        engine.update_many(&mut states, &second);
+        let third: [&[u8]; 16] = core::array::from_fn(|lane| &storage[lane][64..129]);
+        engine.update_many(&mut states, &third);
+
+        let mut outputs = [[0u8; 16]; 16];
+        engine.finalize_many(&states, &mut outputs);
+        for lane in 0..16 {
+            assert_eq!(outputs[lane], reference(&storage[lane]), "lane={lane}");
         }
     }
 

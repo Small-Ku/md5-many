@@ -5064,6 +5064,108 @@ fn full_block_words<SIMD: Simd>(
 }
 
 #[inline(always)]
+fn compress_many_blocks_inner<SIMD: Simd>(
+    simd: SIMD,
+    states: &mut [[u32; 4]],
+    inputs: &[&[u8]],
+) {
+    debug_assert_eq!(states.len(), inputs.len());
+    debug_assert!(inputs
+        .first()
+        .is_none_or(|first| inputs.iter().all(|input| input.len() == first.len())));
+    debug_assert!(inputs.first().is_none_or(|input| input.len() % 64 == 0));
+
+    let lanes = SIMD::u32s::N;
+    debug_assert!(lanes <= MAX_LANES);
+
+    let mut start = 0;
+    while start < inputs.len() {
+        let end = core::cmp::min(start + lanes, inputs.len());
+        let input_chunk = &inputs[start..end];
+        let state_chunk = &mut states[start..end];
+        let active = input_chunk.len();
+
+        // Under-filled two-stream batches are cheaper on the optimized scalar
+        // compressors than paying a whole SIMD round schedule.
+        if active < 3 {
+            for (state, input) in state_chunk.iter_mut().zip(input_chunk) {
+                for block in input.chunks_exact(64) {
+                    let block: &[u8; 64] = block.try_into().expect("64-byte chunk");
+                    scalar::compress_block(state, block);
+                }
+            }
+            start = end;
+            continue;
+        }
+
+        let mut vector_state: [SIMD::u32s; 4] = core::array::from_fn(|word| {
+            SIMD::u32s::from_fn(simd, |lane| {
+                if lane < active {
+                    state_chunk[lane][word]
+                } else {
+                    STATE_INIT[word]
+                }
+            })
+        });
+
+        let block_count = input_chunk[0].len() / 64;
+        for block_index in 0..block_count {
+            let words = full_block_words(simd, input_chunk, active, block_index);
+            compress_words::<SIMD>(&mut vector_state, &words);
+        }
+
+        for lane in 0..active {
+            for word in 0..4 {
+                state_chunk[lane][word] = vector_state[word][lane];
+            }
+        }
+        start = end;
+    }
+}
+
+/// Compress equal-length, block-aligned message fragments starting from
+/// caller-supplied MD5 states. This is the primitive used by incremental
+/// multi-stream hashing; unlike the one-shot kernels it performs no padding.
+pub(crate) fn compress_many_blocks_with_level(
+    level: Level,
+    states: &mut [[u32; 4]],
+    inputs: &[&[u8]],
+) {
+    assert_eq!(states.len(), inputs.len(), "state/input length mismatch");
+    if inputs.is_empty() {
+        return;
+    }
+    let len = inputs[0].len();
+    assert!(len % 64 == 0, "incremental SIMD input must be block aligned");
+    assert!(
+        inputs.iter().all(|input| input.len() == len),
+        "incremental SIMD inputs must have equal lengths"
+    );
+
+    // A stateful update can temporarily have fewer active streams than the
+    // engine's widest level. Select the narrowest native x86 vector width
+    // that can hold the compacted batch instead of doing 4 streams in 16
+    // AVX-512 lanes, for example.
+    #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+    {
+        if states.len() <= 4 {
+            if let Some(sse2) = level.as_sse2() {
+                compress_many_blocks_inner(sse2, states, inputs);
+                return;
+            }
+        }
+        if states.len() <= 8 {
+            if let Some(avx2) = level.as_avx2() {
+                compress_many_blocks_inner(avx2, states, inputs);
+                return;
+            }
+        }
+    }
+
+    dispatch!(level, simd => compress_many_blocks_inner(simd, states, inputs));
+}
+
+#[inline(always)]
 fn padded_blocks_for_len(len: usize) -> usize {
     let full_blocks = len / 64;
     let tail = len & 63;
