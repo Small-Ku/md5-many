@@ -10,7 +10,8 @@ use core::sync::atomic::{AtomicU8, Ordering};
 
 use core::arch::x86_64::{
     __m128i, _mm_add_epi32, _mm_cvtsi32_si128, _mm_cvtsi128_si32, _mm_loadu_si128, _mm_rol_epi32,
-    _mm_srli_epi64, _mm_srli_si128, _mm_ternarylogic_epi32, _mm_unpackhi_epi64,
+    _mm_srli_epi64, _mm_srli_si128, _mm_storeu_si128, _mm_ternarylogic_epi32, _mm_unpackhi_epi64,
+    _mm_unpacklo_epi32, _mm_unpacklo_epi64,
 };
 
 use crate::consts::STATE_INIT;
@@ -343,6 +344,19 @@ unsafe fn vector_state_to_scalar(state: [__m128i; STATE_WORDS]) -> [u32; STATE_W
     }
 }
 
+#[cfg(feature = "bench-internals")]
+#[inline(always)]
+unsafe fn vector_state_to_bytes_packed(state: [__m128i; STATE_WORDS]) -> [u8; 16] {
+    // Keep this candidate benchmark-only until Intel hardware establishes that
+    // two unpack operations plus one 16-byte store beat four scalar extracts.
+    let ab = unsafe { _mm_unpacklo_epi32(state[0], state[1]) };
+    let cd = unsafe { _mm_unpacklo_epi32(state[2], state[3]) };
+    let abcd = unsafe { _mm_unpacklo_epi64(ab, cd) };
+    let mut out = [0u8; 16];
+    unsafe { _mm_storeu_si128(out.as_mut_ptr().cast(), abcd) };
+    out
+}
+
 #[target_feature(enable = "avx512f,avx512vl")]
 pub(crate) unsafe fn compress_block(state: &mut [u32; STATE_WORDS], block: &[u8; BLOCK_SIZE]) {
     let mut vector_state = unsafe { vector_state_from_scalar(state) };
@@ -417,4 +431,50 @@ pub(crate) unsafe fn hash_generic(input: &[u8]) -> [u8; 16] {
         chunk.copy_from_slice(&word.to_le_bytes());
     }
     out
+}
+#[cfg(feature = "bench-internals")]
+#[target_feature(enable = "avx512f,avx512vl")]
+pub(crate) unsafe fn hash_packed_digest(input: &[u8]) -> [u8; 16] {
+    if input.len() <= 55 {
+        return unsafe { hash_short_one_block_packed_digest(input) };
+    }
+
+    let mut vector_state = unsafe { vector_state_from_scalar(&STATE_INIT) };
+    let mut chunks = input.chunks_exact(BLOCK_SIZE);
+    for chunk in &mut chunks {
+        let block: &[u8; BLOCK_SIZE] = chunk.try_into().expect("64-byte chunk");
+        unsafe { compress_block_vec(&mut vector_state, block) };
+    }
+
+    let tail = chunks.remainder();
+    let mut final_blocks = [[0u8; BLOCK_SIZE]; 2];
+    final_blocks[0][..tail.len()].copy_from_slice(tail);
+    final_blocks[0][tail.len()] = 0x80;
+    let bit_len = (input.len() as u64).wrapping_mul(8).to_le_bytes();
+    let used = if tail.len() <= 55 {
+        final_blocks[0][56..64].copy_from_slice(&bit_len);
+        1
+    } else {
+        final_blocks[1][56..64].copy_from_slice(&bit_len);
+        2
+    };
+    for block in &final_blocks[..used] {
+        unsafe { compress_block_vec(&mut vector_state, block) };
+    }
+
+    unsafe { vector_state_to_bytes_packed(vector_state) }
+}
+
+#[cfg(feature = "bench-internals")]
+#[target_feature(enable = "avx512f,avx512vl")]
+unsafe fn hash_short_one_block_packed_digest(input: &[u8]) -> [u8; 16] {
+    debug_assert!(input.len() <= 55);
+    let mut block = [0u8; BLOCK_SIZE];
+    block[..input.len()].copy_from_slice(input);
+    block[input.len()] = 0x80;
+    block[56..64].copy_from_slice(&(input.len() as u64).wrapping_mul(8).to_le_bytes());
+
+    let mut vector_state = unsafe { vector_state_from_scalar(&STATE_INIT) };
+    unsafe { compress_block_vec(&mut vector_state, &block) };
+    unsafe { vector_state_to_bytes_packed(vector_state) }
 }

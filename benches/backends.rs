@@ -100,6 +100,37 @@ fn bench_x86_single_stream(c: &mut Criterion) {
 #[cfg(not(target_arch = "x86_64"))]
 fn bench_x86_single_stream(_c: &mut Criterion) {}
 
+#[cfg(target_arch = "x86_64")]
+fn bench_x86_avx512_digest_store(c: &mut Criterion) {
+    use md5_many::bench_internals::{
+        md5_x86_avx512, md5_x86_avx512_packed_digest, x86_avx512_supported,
+    };
+
+    if !x86_avx512_supported() {
+        return;
+    }
+
+    let data = vec![0x42u8; 4096];
+    let mut group = c.benchmark_group("backend-x86-avx512-digest-store");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(150));
+    group.measurement_time(Duration::from_millis(400));
+    for &len in &[1usize, 15, 31, 55, 64, 1024, 4096] {
+        let input = &data[..len];
+        group.throughput(Throughput::Bytes(len as u64));
+        group.bench_with_input(BenchmarkId::new("scalar-extract", len), &len, |b, _| {
+            b.iter(|| black_box(md5_x86_avx512(black_box(input))))
+        });
+        group.bench_with_input(BenchmarkId::new("packed-store", len), &len, |b, _| {
+            b.iter(|| black_box(md5_x86_avx512_packed_digest(black_box(input))))
+        });
+    }
+    group.finish();
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn bench_x86_avx512_digest_store(_c: &mut Criterion) {}
+
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 fn bench_aarch64_single_stream(c: &mut Criterion) {
     use md5_many::bench_internals::{md5_aarch64_gpr, md5_portable};
@@ -169,6 +200,7 @@ criterion_group!(
     bench_aligned_framing,
     bench_x86_avx512_short,
     bench_x86_single_stream,
+    bench_x86_avx512_digest_store,
     bench_aarch64_single_stream,
     bench_aarch64_neon4
 );

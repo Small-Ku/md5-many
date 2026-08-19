@@ -137,6 +137,19 @@ pub mod bench_internals {
         // SAFETY: the assertion above checks both required target features.
         unsafe { crate::scalar_x86_64_avx512::hash(input) }
     }
+
+    /// Force the benchmark-only packed-digest AVX-512VL candidate.
+    ///
+    /// # Panics
+    ///
+    /// Panics when AVX-512F or AVX-512VL is unavailable.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn md5_x86_avx512_packed_digest(input: &[u8]) -> Md5Digest {
+        assert!(x86_avx512_supported());
+        // SAFETY: the assertion above checks both required target features.
+        unsafe { crate::scalar_x86_64_avx512::hash_packed_digest(input) }
+    }
 }
 
 pub use incremental::Md5State;
