@@ -666,6 +666,69 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "std")]
+    #[test]
+    fn incremental_many_lockstep_then_mixed_matches_reference() {
+        let engine = Md5Many::new();
+        let lanes = engine.lanes();
+        let storage: std::vec::Vec<std::vec::Vec<u8>> = (0..lanes)
+            .map(|lane| (0..257).map(|i| (lane * 31 + i * 43 + 7) as u8).collect())
+            .collect();
+        let mut states = std::vec![Md5State::new(); lanes];
+
+        // The first update is deliberately lockstep and leaves a partial
+        // block in every stream. The second update diverges lane-by-lane and
+        // must fall back to the general compaction scheduler without losing
+        // the buffered prefix.
+        let first: std::vec::Vec<&[u8]> = storage.iter().map(|message| &message[..47]).collect();
+        engine.update_many(&mut states, &first);
+
+        let second_lengths: std::vec::Vec<usize> =
+            (0..lanes).map(|lane| 1 + ((lane * 37) % 173)).collect();
+        let second: std::vec::Vec<&[u8]> = storage
+            .iter()
+            .zip(&second_lengths)
+            .map(|(message, &len)| &message[47..47 + len])
+            .collect();
+        engine.update_many(&mut states, &second);
+
+        let mut outputs = std::vec![[0u8; 16]; lanes];
+        engine.finalize_many(&states, &mut outputs);
+        for lane in 0..lanes {
+            let len = 47 + second_lengths[lane];
+            assert_eq!(
+                outputs[lane],
+                reference(&storage[lane][..len]),
+                "lane={lane}, len={len}"
+            );
+        }
+    }
+
+    #[cfg(feature = "std")]
+    #[test]
+    fn incremental_avx512_stateful_kernel_matches_reference() {
+        let detected = fearless_simd::Level::new();
+        let Some(avx512) = detected.as_avx512() else {
+            return;
+        };
+
+        let engine = Md5Many::from_level(fearless_simd::Level::Avx512(avx512));
+        let storage: [[u8; 521]; 16] =
+            core::array::from_fn(|lane| core::array::from_fn(|i| (lane * 59 + i * 17) as u8));
+        let mut states = [Md5State::new(); 16];
+
+        for (start, end) in [(0, 17), (17, 64), (64, 129), (129, 257), (257, 521)] {
+            let inputs: [&[u8]; 16] = core::array::from_fn(|lane| &storage[lane][start..end]);
+            engine.update_many(&mut states, &inputs);
+        }
+
+        let mut outputs = [[0u8; 16]; 16];
+        engine.finalize_many(&states, &mut outputs);
+        for lane in 0..16 {
+            assert_eq!(outputs[lane], reference(&storage[lane]), "lane={lane}");
+        }
+    }
+
     #[cfg(any(feature = "std", target_arch = "wasm32"))]
     proptest::proptest! {
         #![proptest_config(proptest::test_runner::Config::with_cases(64))]
