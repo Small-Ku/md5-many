@@ -438,7 +438,26 @@ pub(crate) unsafe fn hash_packed_digest(input: &[u8]) -> [u8; 16] {
     if input.len() <= 55 {
         return unsafe { hash_short_one_block_packed_digest(input) };
     }
+    unsafe { hash_generic_packed_digest(input) }
+}
 
+#[cfg(feature = "bench-internals")]
+#[target_feature(enable = "avx512f,avx512vl")]
+unsafe fn hash_short_one_block_packed_digest(input: &[u8]) -> [u8; 16] {
+    debug_assert!(input.len() <= 55);
+    let mut block = [0u8; BLOCK_SIZE];
+    block[..input.len()].copy_from_slice(input);
+    block[input.len()] = 0x80;
+    block[56..64].copy_from_slice(&(input.len() as u64).wrapping_mul(8).to_le_bytes());
+
+    let mut vector_state = unsafe { vector_state_from_scalar(&STATE_INIT) };
+    unsafe { compress_block_vec(&mut vector_state, &block) };
+    unsafe { vector_state_to_bytes_packed(vector_state) }
+}
+
+#[cfg(feature = "bench-internals")]
+#[target_feature(enable = "avx512f,avx512vl")]
+unsafe fn hash_generic_packed_digest(input: &[u8]) -> [u8; 16] {
     let mut vector_state = unsafe { vector_state_from_scalar(&STATE_INIT) };
     let mut chunks = input.chunks_exact(BLOCK_SIZE);
     for chunk in &mut chunks {
@@ -462,20 +481,6 @@ pub(crate) unsafe fn hash_packed_digest(input: &[u8]) -> [u8; 16] {
         unsafe { compress_block_vec(&mut vector_state, block) };
     }
 
-    unsafe { vector_state_to_bytes_packed(vector_state) }
-}
-
-#[cfg(feature = "bench-internals")]
-#[target_feature(enable = "avx512f,avx512vl")]
-unsafe fn hash_short_one_block_packed_digest(input: &[u8]) -> [u8; 16] {
-    debug_assert!(input.len() <= 55);
-    let mut block = [0u8; BLOCK_SIZE];
-    block[..input.len()].copy_from_slice(input);
-    block[input.len()] = 0x80;
-    block[56..64].copy_from_slice(&(input.len() as u64).wrapping_mul(8).to_le_bytes());
-
-    let mut vector_state = unsafe { vector_state_from_scalar(&STATE_INIT) };
-    unsafe { compress_block_vec(&mut vector_state, &block) };
     unsafe { vector_state_to_bytes_packed(vector_state) }
 }
 
