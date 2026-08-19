@@ -29,6 +29,8 @@ mod scalar_x86_64_avx512;
 #[cfg(target_arch = "x86_64")]
 mod scalar_x86_64_dual;
 mod simd;
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+mod simd_aarch64;
 
 #[cfg(feature = "digest")]
 /// RustCrypto block-level compatibility API.
@@ -77,6 +79,13 @@ pub mod bench_internals {
     #[must_use]
     pub fn md5_aarch64_gpr(input: &[u8]) -> Md5Digest {
         crate::scalar::hash_aarch64_gpr(input)
+    }
+
+    /// Force the native four-way AArch64 NEON equal-length candidate.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[must_use]
+    pub fn md5_aarch64_neon4(inputs: [&[u8]; 4]) -> [Md5Digest; 4] {
+        crate::simd_aarch64::hash_equal_len4(inputs)
     }
 
     /// Hash a non-empty block-aligned message through the compact final-block candidate.

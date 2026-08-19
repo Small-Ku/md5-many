@@ -125,12 +125,51 @@ fn bench_aarch64_single_stream(c: &mut Criterion) {
 #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
 fn bench_aarch64_single_stream(_c: &mut Criterion) {}
 
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn bench_aarch64_neon4(c: &mut Criterion) {
+    use md5_many::bench_internals::md5_aarch64_neon4;
+
+    let engine = md5_many::Md5Many::new();
+    if engine.lanes() != 4 {
+        return;
+    }
+
+    for &len in &[0usize, 55, 64, 1024, 64 * 1024, 1024 * 1024] {
+        let data: [Vec<u8>; 4] = core::array::from_fn(|lane| {
+            (0..len)
+                .map(|index| (index as u8).wrapping_add(lane as u8 * 41))
+                .collect()
+        });
+        let inputs = data.each_ref().map(|input| input.as_slice());
+        let mut generic_outputs = [[0u8; 16]; 4];
+        let mut group = c.benchmark_group(format!("backend-aarch64-neon4-{len}"));
+        group.sample_size(20);
+        group.warm_up_time(Duration::from_millis(250));
+        group.measurement_time(Duration::from_millis(750));
+        group.throughput(Throughput::Bytes((len * 4) as u64));
+        group.bench_function("fearless-neon", |b| {
+            b.iter(|| {
+                engine.hash_many(black_box(&inputs), black_box(&mut generic_outputs));
+                black_box(generic_outputs)
+            })
+        });
+        group.bench_function("native-neon4", |b| {
+            b.iter(|| black_box(md5_aarch64_neon4(black_box(inputs))))
+        });
+        group.finish();
+    }
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn bench_aarch64_neon4(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_short_framing,
     bench_aligned_framing,
     bench_x86_avx512_short,
     bench_x86_single_stream,
-    bench_aarch64_single_stream
+    bench_aarch64_single_stream,
+    bench_aarch64_neon4
 );
 criterion_main!(benches);
