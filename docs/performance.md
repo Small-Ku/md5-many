@@ -223,6 +223,61 @@ still pay a kernel-boundary/state-materialization cost on every completed
 block, so their remaining gap should not be treated as an MD5 round-kernel
 problem. The reported CPU model is an observation of this host, not a runner or platform contract.
 
+### Incremental x86 lockstep saturation on AMD EPYC 9V74
+
+The incremental scheduler was subsequently extended to interleave two and
+three stateful native groups, matching the dependency-hiding structure of the
+one-shot AVX2 and AVX-512 kernels. The same pass removed a redundant
+`buffer_len` field from `Md5State` (the buffered byte count is always
+`bytes_hashed & 63`) and changed x86 state materialization from scalar
+per-word gather/scatter to one 128-bit `[a, b, c, d]` load/store per stream
+plus register transposes. `Md5State` is therefore 88 bytes while retaining one
+64-byte partial block.
+
+To separate MD5 compressor throughput from unavoidable public-API work, the
+following measurements compare a steady block-aligned `update_many` call with
+the same stateful compressor called directly. Values are medians from three
+same-host runs; percentages are `update_many / direct compressor`. This is the
+appropriate denominator for the remaining per-call scheduler and byte-count
+bookkeeping overhead.
+
+| ISA | Streams | 64 B/call | 256 B/call | 4 KiB/call |
+| --- | ---: | ---: | ---: | ---: |
+| SSE2 | 4 | 99.7% | 100.2% | 100.1% |
+| SSE2 | 8 | 98.9% | 100.1% | 99.5% |
+| SSE2 | 12 | 100.9% | 100.3% | 100.0% |
+| AVX2 | 8 | 98.1% | 99.5% | 100.0% |
+| AVX2 | 16 | 95.6% | 98.6% | 99.6% |
+| AVX2 | 24 | 96.7% | 99.0% | 99.7% |
+| AVX-512 | 16 | 94.0% | 99.4% | 100.0% |
+| AVX-512 | 32 | 94.6% | 97.4% | 100.0% |
+| AVX-512 | 48 | 95.0% | 99.3% | 99.6% |
+
+Thus every measured 256-byte-and-larger lockstep path is at least 97.4% of
+its direct stateful compressor, and 4 KiB calls are effectively saturated.
+The worst 64-byte cases are the AVX-512 native/dual paths at roughly 94–95%,
+within about one percentage point of the target. The 48-stream AVX-512 path
+also improved from roughly 6.8 GiB/s to roughly 9.1 GiB/s for a representative
+64-byte steady-call run when its older hardware gather/scatter state packing
+was replaced by the 128-bit load/store transpose.
+
+The remaining single-block gap is not another MD5-round scheduling problem:
+every call must validate the safe slice shape, advance each stream's logical
+byte count, enter the target-feature kernel, and make the externally visible
+AoS state persistent again before returning. An AVX-512 hardware
+gather/scatter experiment for the byte counters made the 64-byte native/dual
+paths substantially worse (roughly 83–86% of the direct compressor) and was
+rejected. A larger per-stream staging buffer was also re-measured and rejected
+below. Materially reducing this last cost would require a different persistent
+batch-state layout/trusted lockstep API, not another transparent optimization
+of the current `Md5State` API.
+
+**Implementation consequence:** preserve the stateful AVX2 8/16/24-way and
+AVX-512 16/32/48-way kernels, the validated lockstep fast path, and the
+128-bit AoS-to-SoA state transposes. The
+`x86-incremental-lockstep-*` Criterion groups cover forced SSE2/AVX2/AVX-512
+native, dual, and triple groups at 64 B and 4 KiB per call.
+
 ## Low-occupancy AMD family 19h scheduling
 
 Sparse SIMD is not always the best way to hash two or three independent
@@ -329,7 +384,9 @@ unproductive rewrites without new evidence.
   after the AVX-512 stateful kernel and lockstep scheduler landed. A 256-byte
   buffer could improve the 16-byte-chunk case by roughly 10% on the measured
   EPYC 9V74, but 32/64-byte and 4 KiB updates showed no stable corresponding
-  gain, while `Md5State` would grow from roughly 96 bytes to roughly 288 bytes.
+  gain. The state used by that experiment was roughly 96 bytes; after removing
+  the redundant `buffer_len`, the retained one-block state is 88 bytes, while
+  256-byte staging would still add roughly another 192 bytes per stream.
   128-byte and 512-byte staging did not establish a better crossover either.
   The memory/API trade-off remains rejected; the public state keeps a single
   64-byte partial block.
