@@ -403,10 +403,15 @@ production dispatch:
   unpacks and one 16-byte store. AMD measurements are mixed/noisy and are not a
   valid basis for the Intel-preferred path, so `backend-x86-avx512-digest-store`
   keeps both epilogues available for an Intel same-binary A/B.
-- AArch64 exposes forced portable and hand-scheduled GPR one-shot paths plus a
-  native four-way equal-length NEON candidate. `backend-aarch64-*` must
-  establish the single-stream winner and NEON crossover on native AArch64
-  hardware before either policy changes.
+- AArch64 exposes forced portable and hand-scheduled GPR one-shot paths plus
+  native 4-way, 8-way, and 12-way equal-length NEON candidates. The 8-way and
+  12-way kernels interleave two or three independent 4-lane dependency chains
+  round-by-round instead of merely invoking the 4-way kernel serially. The
+  occupancy benchmark keeps the serial 4-way grouping as a control, so native
+  ARM measurements can distinguish a better transpose/kernel from genuine ILP
+  gained by interleaving. `backend-aarch64-*` must establish the single-stream
+  winner, native-NEON crossover, and useful interleave depth before any of
+  these candidates enter production dispatch.
 
 ## Experiments rejected so far
 
