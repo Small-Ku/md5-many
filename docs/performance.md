@@ -362,6 +362,20 @@ single-stream backend.
 The hosted runner model is also not a platform contract; future GitHub runners
 may expose different ARM CPUs.
 
+## Short one-shot framing
+
+The public one-shot path now specializes messages of at most 55 bytes as a
+single padded block. This is deliberately a framing specialization, not a
+second MD5 round implementation: it avoids constructing the generic two-block
+finalization buffer and calls the existing selected compressor once.
+
+A same-binary `backend-short-framing` comparison on the AMD EPYC 9V74 runner
+showed roughly 4-10% lower latency at representative 0-55-byte points. The
+benefit disappeared around the two-padding-block boundary, so 56-byte and
+larger messages remain on the generic framing path. A separate compact-final
+block experiment for arbitrary 64-byte-aligned inputs was also inconsistent
+and is not part of production dispatch.
+
 ## Experiments rejected so far
 
 Keeping rejected experiments documented avoids repeating attractive but

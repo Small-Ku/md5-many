@@ -185,7 +185,11 @@ pub(crate) fn hash(input: &[u8]) -> [u8; 16] {
         return unsafe { crate::scalar_x86_64_avx512::hash(input) };
     }
 
-    hash_generic(input)
+    if input.len() <= 55 {
+        hash_short_one_block(input)
+    } else {
+        hash_generic(input)
+    }
 }
 
 pub(crate) fn hash_generic(input: &[u8]) -> [u8; 16] {
@@ -218,7 +222,6 @@ pub(crate) fn hash_generic(input: &[u8]) -> [u8; 16] {
     state_to_bytes(state)
 }
 
-#[cfg(feature = "bench-internals")]
 #[inline]
 pub(crate) fn hash_short_one_block(input: &[u8]) -> [u8; 16] {
     assert!(input.len() <= 55);
