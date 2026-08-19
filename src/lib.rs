@@ -78,11 +78,24 @@ pub mod bench_internals {
         crate::scalar::hash_portable(input)
     }
 
+    /// Force the portable compressor with the <=55-byte one-block framing.
+    #[must_use]
+    pub fn md5_portable_short(input: &[u8]) -> Md5Digest {
+        crate::scalar::hash_portable_short(input)
+    }
+
     /// Force the little-endian AArch64 GPR compressor with generic one-shot framing.
     #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
     #[must_use]
     pub fn md5_aarch64_gpr(input: &[u8]) -> Md5Digest {
         crate::scalar::hash_aarch64_gpr(input)
+    }
+
+    /// Force the AArch64 GPR compressor with the <=55-byte one-block framing.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[must_use]
+    pub fn md5_aarch64_gpr_short(input: &[u8]) -> Md5Digest {
+        crate::scalar::hash_aarch64_gpr_short(input)
     }
 
     /// Force the native four-way AArch64 NEON equal-length candidate.

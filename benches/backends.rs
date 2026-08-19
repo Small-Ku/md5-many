@@ -182,6 +182,30 @@ fn bench_aarch64_single_stream(c: &mut Criterion) {
 fn bench_aarch64_single_stream(_c: &mut Criterion) {}
 
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn bench_aarch64_short(c: &mut Criterion) {
+    use md5_many::bench_internals::{md5_aarch64_gpr_short, md5_portable_short};
+
+    let data = [0x5du8; 55];
+    let mut group = c.benchmark_group("backend-aarch64-short");
+    group.sample_size(20);
+    group.warm_up_time(Duration::from_millis(150));
+    group.measurement_time(Duration::from_millis(500));
+    for &len in &[0usize, 1, 15, 31, 47, 55] {
+        let input = &data[..len];
+        group.bench_with_input(BenchmarkId::new("portable", len), &len, |b, _| {
+            b.iter(|| black_box(md5_portable_short(black_box(input))))
+        });
+        group.bench_with_input(BenchmarkId::new("gpr", len), &len, |b, _| {
+            b.iter(|| black_box(md5_aarch64_gpr_short(black_box(input))))
+        });
+    }
+    group.finish();
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn bench_aarch64_short(_c: &mut Criterion) {}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 fn bench_aarch64_neon4(c: &mut Criterion) {
     use md5_many::bench_internals::md5_aarch64_neon4;
 
@@ -219,6 +243,53 @@ fn bench_aarch64_neon4(c: &mut Criterion) {
 #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
 fn bench_aarch64_neon4(_c: &mut Criterion) {}
 
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn bench_aarch64_neon_occupancy(c: &mut Criterion) {
+    use md5_many::bench_internals::md5_aarch64_neon4;
+
+    let engine = md5_many::Md5Many::new();
+    for &lanes in &[4usize, 8, 12] {
+        for &len in &[55usize, 64, 1024, 64 * 1024] {
+            let data: Vec<Vec<u8>> = (0..lanes)
+                .map(|lane| {
+                    (0..len)
+                        .map(|index| (index as u8).wrapping_add(lane as u8 * 37))
+                        .collect()
+                })
+                .collect();
+            let inputs: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+            let mut generic_outputs = vec![[0u8; 16]; lanes];
+            let mut native_outputs = vec![[0u8; 16]; lanes];
+            let mut group =
+                c.benchmark_group(format!("backend-aarch64-neon-occupancy-{lanes}x{len}"));
+            group.sample_size(20);
+            group.warm_up_time(Duration::from_millis(200));
+            group.measurement_time(Duration::from_millis(600));
+            group.throughput(Throughput::Bytes((lanes * len) as u64));
+            group.bench_function("fearless-neon", |b| {
+                b.iter(|| {
+                    engine.hash_many(black_box(&inputs), black_box(&mut generic_outputs));
+                    black_box(&generic_outputs)
+                })
+            });
+            group.bench_function("native-neon4-groups", |b| {
+                b.iter(|| {
+                    for (group_index, chunk) in inputs.chunks_exact(4).enumerate() {
+                        let four: [&[u8]; 4] = chunk.try_into().expect("four equal-length inputs");
+                        let got = md5_aarch64_neon4(black_box(four));
+                        native_outputs[group_index * 4..group_index * 4 + 4].copy_from_slice(&got);
+                    }
+                    black_box(&native_outputs)
+                })
+            });
+            group.finish();
+        }
+    }
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn bench_aarch64_neon_occupancy(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_short_framing,
@@ -228,6 +299,8 @@ criterion_group!(
     bench_x86_avx512_digest_store,
     bench_x86_dispatch_once,
     bench_aarch64_single_stream,
-    bench_aarch64_neon4
+    bench_aarch64_short,
+    bench_aarch64_neon4,
+    bench_aarch64_neon_occupancy
 );
 criterion_main!(benches);

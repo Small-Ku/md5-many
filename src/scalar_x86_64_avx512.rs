@@ -478,3 +478,23 @@ unsafe fn hash_short_one_block_packed_digest(input: &[u8]) -> [u8; 16] {
     unsafe { compress_block_vec(&mut vector_state, &block) };
     unsafe { vector_state_to_bytes_packed(vector_state) }
 }
+
+#[cfg(all(test, feature = "bench-internals"))]
+mod bench_candidate_tests {
+    use super::{hash, hash_packed_digest, is_supported};
+
+    #[test]
+    fn packed_digest_epilogue_matches_scalar_extract() {
+        if !is_supported() {
+            return;
+        }
+        let data = [0xa7u8; 4096];
+        for &len in &[0usize, 1, 15, 31, 55, 56, 63, 64, 65, 119, 120, 1024, 4096] {
+            // SAFETY: the feature probe above verifies AVX-512F + AVX-512VL.
+            let expected = unsafe { hash(&data[..len]) };
+            // SAFETY: the feature probe above verifies AVX-512F + AVX-512VL.
+            let got = unsafe { hash_packed_digest(&data[..len]) };
+            assert_eq!(got, expected, "len={len}");
+        }
+    }
+}
