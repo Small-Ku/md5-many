@@ -10788,6 +10788,19 @@ fn hash_many_aarch64_neon(neon: Neon, inputs: &[&[u8]], outputs: &mut [[u8; 16]]
     }
 }
 
+#[cfg(all(
+    feature = "bench-internals",
+    target_arch = "aarch64",
+    target_endian = "little"
+))]
+pub(crate) fn hash_many_aarch64_fearless_neon_for_bench(
+    neon: Neon,
+    inputs: &[&[u8]],
+    outputs: &mut [[u8; 16]],
+) {
+    hash_many_inner(neon, inputs, outputs);
+}
+
 pub(crate) fn hash_many_with_level(level: Level, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
     assert!(
         outputs.len() >= inputs.len(),

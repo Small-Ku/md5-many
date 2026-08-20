@@ -119,6 +119,19 @@ pub mod bench_internals {
         crate::simd_aarch64::hash_equal_len12(inputs)
     }
 
+    /// Force the pre-native AArch64 Fearless SIMD batch path.
+    #[cfg(all(feature = "std", target_arch = "aarch64", target_endian = "little"))]
+    pub fn md5_many_aarch64_fearless_neon(inputs: &[&[u8]], outputs: &mut [Md5Digest]) {
+        assert!(outputs.len() >= inputs.len());
+        let outputs = &mut outputs[..inputs.len()];
+        match super::Md5Many::new().level {
+            fearless_simd::Level::Neon(neon) => {
+                crate::simd::hash_many_aarch64_fearless_neon_for_bench(neon, inputs, outputs);
+            }
+            _ => panic!("AArch64 backend probe expected a NEON level"),
+        }
+    }
+
     /// Hash a non-empty block-aligned message through the compact final-block candidate.
     #[must_use]
     pub fn md5_aligned(input: &[u8]) -> Md5Digest {
