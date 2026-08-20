@@ -371,12 +371,39 @@ Round-interleaving independent four-lane chains was substantially stronger:
 near 952 MiB/s at 1 KiB and 1.016 GiB/s at 64 KiB, confirming that the extra
 8/12-way gain is genuine inter-chain ILP rather than only a better transpose.
 
-Production AArch64 batch dispatch consequently uses native NEON only when the
-whole input batch is equal-length and has at least four messages. It consumes
-12-way groups preferentially, except a 16-message region is scheduled as 8+8
-to avoid a final 4-way group; remaining one to three lanes use the existing
-generic path. Mixed-length batches intentionally remain on Fearless SIMD until
-a native mixed scheduler has direct hardware evidence.
+Production AArch64 batch dispatch consequently uses native NEON for measured
+equal-length shapes. It consumes 12-way groups preferentially, except a
+16-message region is scheduled as 8+8 to avoid a final 4-way group; remaining
+one to three lanes use the existing generic path unless a measured padded
+under-fill rule applies.
+
+A follow-up same-binary N2 probe measured lane duplication for 5–15 equal
+messages at 55, 56, 64, 119, 120, 128, 256, 1 KiB, and 64 KiB. Padding 6/7,
+10/11, and 15 lanes to the next measured native width won at every sampled
+point from 55 B upward, ranging from roughly 7% to 59% lower latency. Five
+lanes lost about 12% at 55 B but won from the 56-byte padding boundary and by
+about 21% on aligned/long inputs. Nine lanes lost about 8% at 55 B and about
+1% at 119 B, while aligned inputs and long messages won by roughly 7–11%.
+Padding 13/14 lanes to 16 was rejected: 13 lanes regressed about 26–32% and
+14 lanes about 3.5–15% across the measured matrix. Production therefore keeps
+explicit conservative crossover guards rather than padding every under-filled
+group.
+
+The same run supplied direct hardware evidence for native mixed scheduling.
+For 4/8/12-message batches whose byte lengths differ but whose messages require
+the same total number of padded MD5 blocks, the native path reduced latency by
+about 38–55%, 63–67%, and 66–72% respectively versus the then-current
+production scheduler across short, ~1 KiB, and ~64 KiB probes. The production
+mixed scheduler now replaces consecutive 4/8/12-message generic chunks with
+that native kernel when the padded-block-count condition holds, while preserving
+the previous four-lane generic chunk boundaries for rejected heterogeneous
+prefixes.
+
+The preceding duplicate whole-batch/four-lane mixed-length scan was also
+removed. The blocking `mixed-short` ABBA sentinel moved from a prior ~2.3%
+slowdown to about **1.0% faster** than `0.1.0-alpha.4`, confirming that the
+dispatch fixed-cost regression was eliminated before enabling the native mixed
+path.
 
 The hosted runner model is also not a platform contract; future GitHub runners
 may expose different ARM CPUs.
@@ -424,10 +451,10 @@ production dispatch:
   keeps both epilogues available for an Intel same-binary A/B.
 - AArch64 backend probes retain forced portable/GPR and forced Fearless/native
   NEON controls even though the measured Neoverse-N2 results have now moved
-  portable single-stream and equal-length native NEON into production. These
+  portable single-stream, equal-length native NEON, selected padded under-fill
+  shapes, and same-padded-block-count mixed chunks into production. These
   probes remain useful for detecting a future runner/microarchitecture where
-  the crossover differs. A separate scheduler benchmark covers 5/16/20/28
-  lanes so production group composition can be checked directly.
+  the crossover differs.
 
 ## Experiments rejected so far
 

@@ -19,7 +19,7 @@ Inputs arrive message-major (AoS). Native x86 kernels load one 64-byte block per
 
 - AVX2: 8-way native, 16-way dual, 24-way triple.
 - AVX-512: 16-way native, 32-way dual, 48-way triple.
-- AArch64: on measured Neoverse-N2 hardware, production single-stream uses the portable Rust compressor rather than the hand-scheduled GPR path. Equal-length batches use native NEON 4/8/12-way kernels, with 8/12-way groups round-interleaved for ILP. Prefer 12-way groups, except schedule a final 16-message region as 8+8 rather than 12+4. Keep mixed-length batches on the generic Fearless SIMD scheduler until a native mixed path has direct hardware evidence.
+- AArch64: on measured Neoverse-N2 hardware, production single-stream uses the portable Rust compressor rather than the hand-scheduled GPR path. Equal-length batches use native NEON 4/8/12-way kernels, with 8/12-way groups round-interleaved for ILP. Prefer 12-way groups, except schedule a final 16-message region as 8+8 rather than 12+4. Measured under-filled groups may duplicate the final real lane: 6/7/10/11/15 lanes do so from 55 B upward; 5 lanes use the measured padding/alignment crossover; 9 lanes use a more conservative alignment/padding/long-message crossover; 13/14 lanes stay on the ordinary composition because padding to 16 regressed every measured point.
 - Equal-length padding uses `build_padded_block` rather than byte-at-a-time synthesis.
 - A pure padding block shared by every lane is parsed once and broadcast instead of loaded/transposed N times.
 - Under-filled AVX2 dual/triple candidates duplicate a real lane rather than falling into a small tail: 9-15 messages use padded dual, 17-23 padded triple, and 26-31 equal/near-mixed batches use two dual kernels.
@@ -32,6 +32,7 @@ Inputs arrive message-major (AoS). Native x86 kernels load one 64-byte block per
 
 - Process the common full-block prefix with the same native transpose/compression machinery.
 - Build only divergent padded tails separately.
+- On measured Neoverse-N2 AArch64, consecutive 4/8/12-message chunks whose messages require the same total number of padded MD5 blocks use the native NEON mixed kernel. Check the first four lanes once and only extend the same-block-count run to 8/12 lanes; do not repeatedly rescan rejected heterogeneous prefixes.
 - Dual/triple mixed kernels interleave independent SIMD state chains just like equal-length kernels.
 - The no-allocation skew planner also protects under-filled dual/triple and partial-tail fast paths. If padded block counts differ by at least 2x, it recursively partitions short and long lanes, hashes the sub-batches, then scatters digests back to the caller's order.
 - AVX-512 17-31 and 33-47-message mixed/equal batches can use padded dual/triple kernels. Selected 50-63-message shapes stay in two AVX-512 dual kernels when that avoids a pathological tiny or large AVX2 tail.

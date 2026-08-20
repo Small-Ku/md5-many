@@ -4,6 +4,11 @@ All notable changes to `md5-many` will be documented in this file.
 
 ## Unreleased
 
+- Switch measured AArch64 single-stream dispatch back to the faster portable Rust compressor and add native NEON 4/8/12-way batch kernels, including round-interleaved 8/12-way scheduling and direct `ST4` digest stores.
+- Extend AArch64 production scheduling with Neoverse-N2-measured under-filled equal-length lane duplication and native mixed-length 4/8/12-way chunks when all lanes require the same padded MD5 block count.
+- Add AArch64 backend probes, crossover matrices, blocking batch sentinels, target-only correctness coverage, and cross-target CI checks so native-NEON policy changes are measured and compiled on the architecture that uses them.
+- Specialize one-shot framing for inputs up to 55 bytes and hoist x86 one-shot backend selection out of the per-block loop, reducing fixed costs without duplicating the MD5 round implementation.
+
 ## 0.1.0-alpha.4 - 2026-08-19
 
 Incremental multi-stream hashing and stateful SIMD saturation across the x86 backends.

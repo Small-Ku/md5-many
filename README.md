@@ -8,7 +8,7 @@ High-throughput MD5 for Rust, with an optimized single-stream path and runtime-d
 
 A single MD5 stream has a dependency between consecutive 64-byte blocks, so wide SIMD is most useful when several independent messages are available at once. `md5-many` therefore exposes two complementary paths:
 
-- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compressor; `md5()` and the streaming `Md5` path can additionally select an XMM-width AVX-512VL compressor on supported Intel CPUs. Little-endian AArch64 uses a hand-scheduled integer compressor. Other targets retain the portable Rust compressor.
+- `md5()` / `Md5`: single-message hashing. x86-64 uses an optimized NoLEA-style scalar compressor; `md5()` and the streaming `Md5` path can additionally select an XMM-width AVX-512VL compressor on supported Intel CPUs. Measured little-endian AArch64 uses the portable Rust compressor, which outperformed the retained hand-scheduled GPR comparison backend on Neoverse-N2. Other targets retain the portable Rust compressor.
 - `Md5Many`: batches independent messages into SIMD lanes and chooses a scheduler appropriate to the detected CPU and workload.
 - `Md5State` + `Md5Many::update_many`: keeps many messages alive across repeated chunked updates, compacts complete blocks into SIMD lanes, and batches final padding without requiring allocation inside the crate.
 
@@ -26,9 +26,9 @@ On x86 the specialized backend currently includes:
 - Small 4–8-message AVX2 tails reuse the no-allocation skew partitioner only when the long partition shrinks to at most two messages; one-short/many-long cases remain on SIMD.
 - AVX-512 small batches remain on AVX2 by default. A narrowly measured x86 family 6/model `0xCF` tuning uses padded AVX-512 for 2-8-message equal or mixed batches once every message is at least 512 B; other AVX-512 CPUs keep the conservative AVX2 choice until measured.
 
-Little-endian AArch64 uses a separate hand-scheduled single-stream integer kernel with paired message/constant loads, `BIC`/`ORN` Boolean forms, and immediate `ROR`. Multi-buffer AArch64 hashing remains on the `fearless_simd` NEON path.
+Little-endian AArch64 uses native NEON multi-buffer kernels on measured profitable shapes. Equal-length work uses 4/8/12-way kernels with round-interleaved 8/12-way dependency chains, plus measured lane-duplication crossovers for selected 5–15-message batches. Mixed 4/8/12-message chunks can also use native NEON when every lane requires the same number of padded MD5 blocks; heterogeneous chunks retain the generic `fearless_simd` fallback. The hand-scheduled AArch64 GPR single-stream implementation is retained as a benchmark comparison backend rather than production dispatch.
 
-Other `fearless_simd` targets retain the portable multi-buffer implementation, including SSE-class x86, AArch64 NEON, WASM SIMD, and scalar fallback as supported by the selected `fearless_simd` release.
+Other `fearless_simd` targets retain the portable multi-buffer implementation, including SSE-class x86, WASM SIMD, and scalar fallback as supported by the selected `fearless_simd` release.
 
 ## Usage
 
