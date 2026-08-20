@@ -39,6 +39,8 @@ jobs:
           rustc -Vv
       - name: Default tests
         run: cargo test --locked
+      - name: Backend candidate correctness
+        run: cargo test --locked --features bench-internals
       - name: no_std + libm tests
         run: cargo test --locked --no-default-features --features libm
       - name: no_std + libm + digest tests
