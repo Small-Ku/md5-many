@@ -17,6 +17,8 @@
 #[cfg(any(feature = "std", test))]
 extern crate std;
 
+#[cfg(any(test, all(target_arch = "aarch64", target_endian = "little")))]
+mod aarch64_policy;
 mod consts;
 mod incremental;
 mod scalar;

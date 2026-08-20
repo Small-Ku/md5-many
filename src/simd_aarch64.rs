@@ -1,3 +1,4 @@
+use crate::aarch64_policy::{equal_len_native_count, equal_len_padding_profitable};
 use core::arch::aarch64::{
     uint32x4_t, uint32x4x4_t, vaddq_u32, vbslq_u32, vcombine_u32, vdupq_n_u32, veorq_u32,
     vget_high_u32, vget_low_u32, vld1q_u8, vornq_u32, vorrq_u32, vreinterpretq_u32_u8, vshlq_n_u32,
@@ -433,7 +434,7 @@ pub(crate) fn hash_same_padded_blocks12(inputs: [&[u8]; 12]) -> [[u8; 16]; 12] {
     outputs
 }
 
-#[cfg(any(test, feature = "bench-internals"))]
+#[cfg(feature = "bench-internals")]
 pub(crate) fn hash_same_padded_blocks_candidate(
     inputs: &[&[u8]],
     outputs: &mut [[u8; 16]],
@@ -510,8 +511,10 @@ pub(crate) fn hash_equal_len12(inputs: [&[u8]; 12]) -> [[u8; 16]; 12] {
 /// round-interleaved four-lane dependency chains are substantially faster
 /// than issuing independent four-lane kernels serially. Prefer 12-way groups,
 /// except that a final 16-message region is split as 8+8 rather than 12+4.
-/// The returned count is always a multiple of four; a caller handles the
-/// remaining zero to three messages through its normal under-filled path.
+/// The returned count is normally the largest multiple-of-four prefix. For
+/// measured profitable under-filled lane counts, the scheduler may duplicate
+/// the final real lane into a native 8/12/16-lane composition and consume the
+/// entire input slice instead. The caller handles only the unconsumed suffix.
 pub(crate) fn hash_equal_len_run(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> usize {
     debug_assert!(outputs.len() >= inputs.len());
     if inputs.len() < 4 {
@@ -520,11 +523,16 @@ pub(crate) fn hash_equal_len_run(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> 
     let len = inputs[0].len();
     debug_assert!(inputs.iter().all(|input| input.len() == len));
 
-    if equal_len_padding_profitable(inputs.len(), len) && hash_equal_len_padded(inputs, outputs) {
+    if equal_len_padding_profitable(inputs.len(), len) {
+        let padded = hash_equal_len_padded(inputs, outputs);
+        debug_assert!(
+            padded,
+            "profitable lane count must have a padded native kernel"
+        );
         return inputs.len();
     }
 
-    let full = inputs.len() & !3usize;
+    let full = equal_len_native_count(inputs.len(), len);
     let mut twelve_groups = full / 12;
     let remainder = full % 12;
     let (eight_groups, four_groups) = match remainder {
@@ -577,28 +585,6 @@ pub(crate) fn hash_equal_len_run(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> 
     start
 }
 
-#[inline(always)]
-fn equal_len_padding_profitable(lanes: usize, len: usize) -> bool {
-    let remainder = len & 63;
-    match lanes {
-        // Five lanes are one native NEON4 group plus one scalar residual in
-        // the old scheduler. N2 measurements cross over at the 56-byte
-        // padding boundary, are strongly positive for aligned blocks, and
-        // remain positive from 120 bytes onward. Skip the weak 65..119 area.
-        5 => len >= 120 || (len >= 56 && (remainder == 0 || remainder >= 56)),
-        // These lane counts win at every measured point from 55 bytes upward.
-        6 | 7 | 10 | 11 | 15 => len >= 55,
-        // Nine lanes are native NEON8 plus one scalar residual today. The
-        // padded NEON12 candidate is clearly positive on aligned blocks and
-        // when padding spills into another block; for longer messages the
-        // interleaved throughput advantage dominates. Avoid the measured
-        // 55/119-byte counterexamples and other unmeasured short remainders.
-        9 => len >= 256 || (len >= 56 && (remainder == 0 || remainder >= 56)),
-        // Padding 13/14 lanes to 16 regressed every measured N2 workload.
-        _ => false,
-    }
-}
-
 fn hash_equal_len_padded(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
     debug_assert_eq!(inputs.len(), outputs.len());
     match inputs.len() {
@@ -646,9 +632,9 @@ pub(crate) fn hash_equal_len_padded_candidate(inputs: &[&[u8]], outputs: &mut [[
 #[cfg(test)]
 mod tests {
     use super::{
-        equal_len_padding_profitable, hash_equal_len_padded_candidate, hash_equal_len_run,
-        hash_equal_len4, hash_equal_len8, hash_equal_len12, hash_same_padded_blocks4,
-        hash_same_padded_blocks8, hash_same_padded_blocks12,
+        equal_len_native_count, equal_len_padding_profitable, hash_equal_len_padded_candidate,
+        hash_equal_len_run, hash_equal_len4, hash_equal_len8, hash_equal_len12,
+        hash_same_padded_blocks4, hash_same_padded_blocks8, hash_same_padded_blocks12,
     };
 
     fn make_data<const LANES: usize>(len: usize) -> [std::vec::Vec<u8>; LANES] {
@@ -684,7 +670,11 @@ mod tests {
             let inputs: std::vec::Vec<&[u8]> = data.iter().map(std::vec::Vec::as_slice).collect();
             let mut outputs = std::vec![[0u8; 16]; lanes];
             let processed = hash_equal_len_run(&inputs, &mut outputs);
-            assert_eq!(processed, lanes & !3usize, "lanes={lanes}");
+            assert_eq!(
+                processed,
+                equal_len_native_count(lanes, 193),
+                "lanes={lanes}"
+            );
             for lane in 0..processed {
                 assert_eq!(
                     outputs[lane],
