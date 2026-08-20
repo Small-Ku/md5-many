@@ -20,7 +20,11 @@ extern crate std;
 mod consts;
 mod incremental;
 mod scalar;
-#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+#[cfg(all(
+    target_arch = "aarch64",
+    target_endian = "little",
+    any(test, feature = "bench-internals")
+))]
 mod scalar_aarch64;
 #[cfg(target_arch = "x86_64")]
 mod scalar_x86_64;
@@ -185,8 +189,8 @@ pub use incremental::Md5State;
 ///
 /// On x86-64 this uses the optimized scalar compressor and may select an
 /// XMM-width AVX-512VL single-stream backend on supported Intel CPUs.
-/// Little-endian AArch64 uses a hand-scheduled integer compressor; other
-/// targets use the portable Rust compressor. For independent-message SIMD
+/// AArch64 and other non-x86 targets use the portable Rust compressor;
+/// the AArch64 integer assembly backend is retained only for benchmarking. For independent-message SIMD
 /// batching, use [`Md5Many`] or [`md5_many`].
 #[must_use]
 pub fn md5(input: &[u8]) -> Md5Digest {

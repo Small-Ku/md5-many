@@ -136,7 +136,7 @@ pub(crate) fn compress_block(state: &mut [u32; 4], block: &[u8; 64]) {
     }
     #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
     {
-        crate::scalar_aarch64::compress_block(state, block);
+        compress_block_portable(state, block);
     }
     #[cfg(not(any(
         target_arch = "x86_64",
@@ -164,7 +164,7 @@ pub(crate) fn compress_blocks(state: &mut [u32; 4], blocks: &[[u8; 64]]) {
     #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
     {
         for block in blocks {
-            crate::scalar_aarch64::compress_block(state, block);
+            compress_block_portable(state, block);
         }
     }
     #[cfg(not(any(
