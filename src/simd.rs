@@ -10770,12 +10770,23 @@ fn hash_many_aarch64_neon(neon: Neon, inputs: &[&[u8]], outputs: &mut [[u8; 16]]
     // whole equal-length batch. Keep mixed batches on the existing Fearless
     // SIMD scheduler: splitting an alternating mixed batch into tiny equal-
     // length runs would throw away its common-prefix SIMD work.
-    if inputs.len() < 4
-        || inputs
-            .get(1..)
-            .is_some_and(|rest| rest.iter().any(|input| input.len() != inputs[0].len()))
-    {
+    if inputs.len() < 4 {
         hash_many_inner(neon, inputs, outputs);
+        return;
+    }
+
+    let first_len = inputs[0].len();
+    let same_len = inputs[1..].iter().all(|input| input.len() == first_len);
+    if !same_len {
+        if inputs.len() == 4 {
+            // We have already established that this one native-width chunk is
+            // mixed. Calling hash_many_inner would repeat the same-length scan
+            // before reaching the same mixed kernel, which is measurable on
+            // tiny messages.
+            hash_mixed_len_chunk(neon, inputs, outputs);
+        } else {
+            hash_many_inner(neon, inputs, outputs);
+        }
         return;
     }
 

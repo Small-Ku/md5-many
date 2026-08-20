@@ -340,6 +340,27 @@ mod tests {
         }
     }
 
+    #[cfg(all(
+        any(feature = "std", target_arch = "wasm32"),
+        target_arch = "aarch64",
+        target_endian = "little"
+    ))]
+    #[test]
+    fn aarch64_four_way_mixed_matches_reference() {
+        let storage = [
+            std::vec![0x11; 0],
+            std::vec![0x22; 1],
+            std::vec![0x33; 7],
+            std::vec![0x44; 15],
+        ];
+        let inputs: [&[u8]; 4] = storage.each_ref().map(std::vec::Vec::as_slice);
+        let mut outputs = [[0u8; 16]; 4];
+        Md5Many::new().hash_many(&inputs, &mut outputs);
+        for lane in 0..4 {
+            assert_eq!(outputs[lane], reference(inputs[lane]), "lane={lane}");
+        }
+    }
+
     #[cfg(any(feature = "std", target_arch = "wasm32"))]
     #[test]
     fn many_equal_length_matches_reference() {
