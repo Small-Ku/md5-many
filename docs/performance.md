@@ -440,15 +440,31 @@ reported approximately 3.3% lower latency at 64 B, 5.1% at 1 KiB, 3.7% at
 significant movement, which isolates the gain to dispatch overhead rather than
 a compressor/code-frequency change.
 
+### AMD AVX-512 single-stream control
+
+The current local VM exposes five vCPUs of an AMD EPYC 9V74 and includes
+AVX-512F/DQ/BW/VL. A CPU-pinned, alternating same-process control reconfirmed
+that AVX-512VL remains the wrong dependency-chain backend on this AMD host:
+forced AVX-512 was about 29-30% slower than NoLEA at 1-64 B and about 35-36%
+slower at 1 KiB through 1 MiB. This is stronger than comparing separate
+Criterion runs because each pair alternated execution order inside one process.
+It reinforces the existing AMD NoLEA dispatch, but it is not evidence for or
+against the Intel family-6 preference.
+
 ### Backend candidates awaiting target hardware
 
 Two candidates deliberately remain behind `bench-internals` rather than
 production dispatch:
 
 - AVX-512VL digest packing replaces four low-dword scalar extracts with two XMM
-  unpacks and one 16-byte store. AMD measurements are mixed/noisy and are not a
-  valid basis for the Intel-preferred path, so `backend-x86-avx512-digest-store`
-  keeps both epilogues available for an Intel same-binary A/B.
+  unpacks and one 16-byte store. Rust 1.97.1 / LLVM 22 already auto-packs the
+  generic (`>=56 B`) scalar-extract epilogue into a vector shuffle plus one
+  16-byte store, so the handwritten candidate only changes the specialized
+  `<=55 B` path in a material way. On the current AMD EPYC 9V74 VM, an
+  alternating same-process A/B stayed within roughly -1% to +2% for the short
+  path and within about +/-1% at 64 B through 1 MiB, so there is no AMD basis
+  for productionizing it. Keep both epilogues available only for a future
+  Intel same-binary A/B, where instruction latency may differ.
 - AArch64 backend probes retain forced portable/GPR and forced Fearless/native
   NEON controls even though the measured Neoverse-N2 results have now moved
   portable single-stream, equal-length native NEON, selected padded under-fill
