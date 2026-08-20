@@ -85,6 +85,14 @@ single-stream AVX-512VL path. The vector-state core must remain inside an
 AVX-512 target-feature context; outlining target-feature thunks or restoring
 scalar state per block materially regresses throughput.
 
+A 2026-08-21 pinned same-process control on another Xeon Platinum 8573C using
+Rust 1.97.1 / LLVM 22.1.6 reconfirmed the dispatch directly. Forced AVX-512VL
+beat forced NoLEA by about 8-9% at representative 1-55 byte one-block inputs,
+about 9.5% at 64 bytes, about 12.5% at 1 KiB, about 8.3% at 64 KiB, and about
+14.5% at 1 MiB. A 64-119-byte one-tail framing candidate was also rejected on
+this host: some lengths improved, but 88/96-byte cases regressed materially, so
+no size-table specialization was added.
+
 ### AMD EPYC 9V74 / family 19h, model `0x11`
 
 A virtualized EPYC 9V74 host exposed AVX-512F/DQ/BW/VL/VNNI/BF16. Capability
@@ -451,26 +459,23 @@ Criterion runs because each pair alternated execution order inside one process.
 It reinforces the existing AMD NoLEA dispatch, but it is not evidence for or
 against the Intel family-6 preference.
 
-### Backend candidates awaiting target hardware
+### Backend probes retained after production tuning
 
-Two candidates deliberately remain behind `bench-internals` rather than
-production dispatch:
+AArch64 backend probes retain forced portable/GPR and forced Fearless/native
+NEON controls even though the measured Neoverse-N2 results have now moved
+portable single-stream, equal-length native NEON, selected padded under-fill
+shapes, and same-padded-block-count mixed chunks into production. These probes
+remain useful for detecting a future runner/microarchitecture where the
+crossover differs.
 
-- AVX-512VL digest packing replaces four low-dword scalar extracts with two XMM
-  unpacks and one 16-byte store. Rust 1.97.1 / LLVM 22 already auto-packs the
-  generic (`>=56 B`) scalar-extract epilogue into a vector shuffle plus one
-  16-byte store, so the handwritten candidate only changes the specialized
-  `<=55 B` path in a material way. On the current AMD EPYC 9V74 VM, an
-  alternating same-process A/B stayed within roughly -1% to +2% for the short
-  path and within about +/-1% at 64 B through 1 MiB, so there is no AMD basis
-  for productionizing it. Keep both epilogues available only for a future
-  Intel same-binary A/B, where instruction latency may differ.
-- AArch64 backend probes retain forced portable/GPR and forced Fearless/native
-  NEON controls even though the measured Neoverse-N2 results have now moved
-  portable single-stream, equal-length native NEON, selected padded under-fill
-  shapes, and same-padded-block-count mixed chunks into production. These
-  probes remain useful for detecting a future runner/microarchitecture where
-  the crossover differs.
+A previously benchmark-only AVX-512VL packed-digest epilogue has now been
+retired. Rust 1.97.1 / LLVM 22 already auto-packs the generic (`>=56 B`)
+scalar-extract epilogue, leaving only the specialized `<=55 B` path materially
+different. On AMD EPYC 9V74 it had no stable advantage. A later pinned
+same-process run on Intel Xeon Platinum 8573C (family 6/model `0xCF`) likewise
+showed short-input changes oscillating around zero rather than a robust win.
+The extra benchmark-only implementation therefore no longer justified its
+maintenance cost.
 
 ## Experiments rejected so far
 
