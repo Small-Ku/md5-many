@@ -6,7 +6,7 @@ use core::arch::aarch64::{
 
 use crate::consts::{K, STATE_INIT};
 
-#[inline(always)]
+#[target_feature(enable = "neon")]
 fn transpose4(rows: [uint32x4_t; 4]) -> [uint32x4_t; 4] {
     let t0 = vtrn1q_u32(rows[0], rows[1]);
     let t1 = vtrn2q_u32(rows[0], rows[1]);
@@ -20,12 +20,12 @@ fn transpose4(rows: [uint32x4_t; 4]) -> [uint32x4_t; 4] {
     ]
 }
 
-#[inline(always)]
+#[target_feature(enable = "neon")]
 fn load_words(blocks: [&[u8; 64]; 4]) -> [uint32x4_t; 16] {
     let mut words = [vdupq_n_u32(0); 16];
     for group in 0..4 {
         let offset = group * 16;
-        let rows = core::array::from_fn(|lane| {
+        let rows: [uint32x4_t; 4] = core::array::from_fn(|lane| {
             // SAFETY: each load reads exactly 16 bytes starting at one of
             // offsets 0, 16, 32, or 48 of a 64-byte MD5 block.
             unsafe { vreinterpretq_u32_u8(vld1q_u8(blocks[lane].as_ptr().add(offset))) }
@@ -36,16 +36,16 @@ fn load_words(blocks: [&[u8; 64]; 4]) -> [uint32x4_t; 16] {
     words
 }
 
-#[inline(always)]
+#[target_feature(enable = "neon")]
 fn compress_words_interleaved<const GROUPS: usize>(
     states: &mut [[uint32x4_t; 4]; GROUPS],
     words: &[[uint32x4_t; 16]; GROUPS],
 ) {
     let initial = *states;
-    let mut a = core::array::from_fn(|group| states[group][0]);
-    let mut b = core::array::from_fn(|group| states[group][1]);
-    let mut c = core::array::from_fn(|group| states[group][2]);
-    let mut d = core::array::from_fn(|group| states[group][3]);
+    let mut a: [uint32x4_t; GROUPS] = core::array::from_fn(|group| states[group][0]);
+    let mut b: [uint32x4_t; GROUPS] = core::array::from_fn(|group| states[group][1]);
+    let mut c: [uint32x4_t; GROUPS] = core::array::from_fn(|group| states[group][2]);
+    let mut d: [uint32x4_t; GROUPS] = core::array::from_fn(|group| states[group][3]);
 
     macro_rules! mix {
         (f, $x:expr, $y:expr, $z:expr) => {
@@ -177,6 +177,7 @@ fn build_padded_block(input: &[u8], padded_blocks: usize, block_index: usize) ->
 /// three groups the MD5 rounds are issued group-by-group before advancing to
 /// the next round, exposing independent dependency chains to the core while
 /// keeping every message inside the same 4-lane transpose/load machinery.
+#[target_feature(enable = "neon")]
 fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
     inputs: [&[u8]; LANES],
 ) -> [[u8; 16]; LANES] {
@@ -184,7 +185,7 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
     let len = inputs[0].len();
     assert!(inputs.iter().all(|input| input.len() == len));
 
-    let initial_state = STATE_INIT.map(vdupq_n_u32);
+    let initial_state = STATE_INIT.map(|word| vdupq_n_u32(word));
     let mut states: [[uint32x4_t; 4]; GROUPS] = core::array::from_fn(|_| initial_state);
     let full_blocks = len / 64;
     for block_index in 0..full_blocks {
@@ -239,17 +240,20 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
 /// This remains an experimental backend until hardware benchmarks establish
 /// its crossover against the generic Fearless SIMD NEON path.
 pub(crate) fn hash_equal_len4(inputs: [&[u8]; 4]) -> [[u8; 16]; 4] {
-    hash_equal_len_groups::<1, 4>(inputs)
+    // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+    unsafe { hash_equal_len_groups::<1, 4>(inputs) }
 }
 
 /// Hash eight equal-length messages as two round-interleaved NEON groups.
 pub(crate) fn hash_equal_len8(inputs: [&[u8]; 8]) -> [[u8; 16]; 8] {
-    hash_equal_len_groups::<2, 8>(inputs)
+    // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+    unsafe { hash_equal_len_groups::<2, 8>(inputs) }
 }
 
 /// Hash twelve equal-length messages as three round-interleaved NEON groups.
 pub(crate) fn hash_equal_len12(inputs: [&[u8]; 12]) -> [[u8; 16]; 12] {
-    hash_equal_len_groups::<3, 12>(inputs)
+    // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+    unsafe { hash_equal_len_groups::<3, 12>(inputs) }
 }
 
 #[cfg(test)]
