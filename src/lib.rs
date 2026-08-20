@@ -395,6 +395,90 @@ mod tests {
         }
     }
 
+    #[cfg(all(
+        any(feature = "std", target_arch = "wasm32"),
+        target_arch = "aarch64",
+        target_endian = "little"
+    ))]
+    #[test]
+    fn aarch64_native_mixed_same_block_scheduler_matches_reference() {
+        for &lanes in &[4usize, 8, 12] {
+            let lengths: std::vec::Vec<usize> = match lanes {
+                4 => std::vec![0, 1, 7, 55],
+                8 => std::vec![56, 57, 63, 64, 65, 95, 111, 119],
+                12 => std::vec![120, 121, 127, 128, 129, 143, 159, 160, 175, 180, 182, 183],
+                _ => unreachable!(),
+            };
+            let storage: std::vec::Vec<std::vec::Vec<u8>> = lengths
+                .iter()
+                .enumerate()
+                .map(|(lane, &len)| {
+                    (0..len)
+                        .map(|index| {
+                            (index as u8)
+                                .wrapping_mul(29)
+                                .wrapping_add((lane as u8).wrapping_mul(37))
+                        })
+                        .collect()
+                })
+                .collect();
+            let inputs: std::vec::Vec<&[u8]> =
+                storage.iter().map(std::vec::Vec::as_slice).collect();
+            let mut outputs = std::vec![[0u8; 16]; lanes];
+            Md5Many::new().hash_many(&inputs, &mut outputs);
+            for lane in 0..lanes {
+                assert_eq!(
+                    outputs[lane],
+                    reference(inputs[lane]),
+                    "lanes={lanes}, lane={lane}"
+                );
+            }
+        }
+    }
+
+    #[cfg(all(
+        any(feature = "std", target_arch = "wasm32"),
+        target_arch = "aarch64",
+        target_endian = "little"
+    ))]
+    #[test]
+    fn aarch64_partial_equal_scheduler_matches_reference() {
+        for &(lanes, len) in &[
+            (5usize, 56usize),
+            (5, 120),
+            (6, 55),
+            (7, 55),
+            (9, 64),
+            (9, 256),
+            (10, 55),
+            (11, 55),
+            (15, 55),
+        ] {
+            let storage: std::vec::Vec<std::vec::Vec<u8>> = (0..lanes)
+                .map(|lane| {
+                    (0..len)
+                        .map(|index| {
+                            (index as u8)
+                                .wrapping_mul(17)
+                                .wrapping_add((lane as u8).wrapping_mul(43))
+                        })
+                        .collect()
+                })
+                .collect();
+            let inputs: std::vec::Vec<&[u8]> =
+                storage.iter().map(std::vec::Vec::as_slice).collect();
+            let mut outputs = std::vec![[0u8; 16]; lanes];
+            Md5Many::new().hash_many(&inputs, &mut outputs);
+            for lane in 0..lanes {
+                assert_eq!(
+                    outputs[lane],
+                    reference(inputs[lane]),
+                    "lanes={lanes}, len={len}, lane={lane}"
+                );
+            }
+        }
+    }
+
     #[cfg(any(feature = "std", target_arch = "wasm32"))]
     #[test]
     fn many_equal_length_matches_reference() {

@@ -10778,14 +10778,39 @@ fn hash_many_aarch64_neon(neon: Neon, inputs: &[&[u8]], outputs: &mut [[u8; 16]]
     let first_len = inputs[0].len();
     let same_len = inputs[1..].iter().all(|input| input.len() == first_len);
     if !same_len {
-        if inputs.len() == 4 {
-            // We have already established that this one native-width chunk is
-            // mixed. Calling hash_many_inner would repeat the same-length scan
-            // before reaching the same mixed kernel, which is measurable on
-            // tiny messages.
-            hash_mixed_len_chunk(neon, inputs, outputs);
-        } else {
-            hash_many_inner(neon, inputs, outputs);
+        let mut start = 0;
+        while start < inputs.len() {
+            let native = crate::simd_aarch64::hash_same_padded_blocks_prefix(
+                &inputs[start..],
+                &mut outputs[start..],
+            );
+            if native != 0 {
+                start += native;
+                continue;
+            }
+
+            // Preserve the old generic scheduler's four-lane chunk boundary
+            // whenever the native mixed condition is not met. This avoids
+            // turning a heterogeneous batch into tiny per-message fallbacks.
+            let end = core::cmp::min(start + 4, inputs.len());
+            let input_chunk = &inputs[start..end];
+            let output_chunk = &mut outputs[start..end];
+            if input_chunk.len() == 4 {
+                // The outer batch is already known to be mixed. A four-lane
+                // chunk can still be equal-length, so retain that fast path
+                // without repeating the whole-batch scan.
+                let same_chunk_len = input_chunk[1..]
+                    .iter()
+                    .all(|input| input.len() == input_chunk[0].len());
+                if same_chunk_len {
+                    hash_equal_len_chunk(neon, input_chunk, output_chunk);
+                } else {
+                    hash_mixed_len_chunk(neon, input_chunk, output_chunk);
+                }
+            } else {
+                hash_many_inner(neon, input_chunk, output_chunk);
+            }
+            start = end;
         }
         return;
     }

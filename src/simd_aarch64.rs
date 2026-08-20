@@ -271,7 +271,6 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
     }
 }
 
-#[cfg(any(test, feature = "bench-internals"))]
 #[target_feature(enable = "neon")]
 fn hash_same_padded_blocks_groups<const GROUPS: usize, const LANES: usize>(
     inputs: [&[u8]; LANES],
@@ -337,6 +336,73 @@ fn hash_same_padded_blocks_groups<const GROUPS: usize, const LANES: usize>(
             )
         };
     }
+}
+
+/// Hash the largest native-width prefix whose messages require the same
+/// number of padded MD5 blocks.
+///
+/// A mixed AArch64 batch is already processed in four-lane chunks by the
+/// generic NEON scheduler.  Hardware measurements on Neoverse-N2 show that
+/// replacing such 4/8/12-message chunks with the native kernel is profitable
+/// even when every lane has a different byte length, provided their padded
+/// block counts match.  Return zero when the current prefix does not meet that
+/// condition so the caller can preserve the existing generic fallback.
+pub(crate) fn hash_same_padded_blocks_prefix(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> usize {
+    debug_assert!(outputs.len() >= inputs.len());
+    if inputs.len() < 4 {
+        return 0;
+    }
+
+    let padded_blocks = padded_blocks_for_len(inputs[0].len());
+    if inputs[1..4]
+        .iter()
+        .any(|input| padded_blocks_for_len(input.len()) != padded_blocks)
+    {
+        return 0;
+    }
+
+    let mut lanes = 4;
+    if inputs.len() >= 8
+        && inputs[4..8]
+            .iter()
+            .all(|input| padded_blocks_for_len(input.len()) == padded_blocks)
+    {
+        lanes = 8;
+        if inputs.len() >= 12
+            && inputs[8..12]
+                .iter()
+                .all(|input| padded_blocks_for_len(input.len()) == padded_blocks)
+        {
+            lanes = 12;
+        }
+    }
+
+    match lanes {
+        12 => {
+            let group: [&[u8]; 12] = inputs[..12].try_into().expect("twelve mixed inputs");
+            let group_outputs: &mut [[u8; 16]; 12] = (&mut outputs[..12])
+                .try_into()
+                .expect("twelve mixed outputs");
+            // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+            unsafe { hash_same_padded_blocks_groups::<3, 12>(group, group_outputs) };
+        }
+        8 => {
+            let group: [&[u8]; 8] = inputs[..8].try_into().expect("eight mixed inputs");
+            let group_outputs: &mut [[u8; 16]; 8] =
+                (&mut outputs[..8]).try_into().expect("eight mixed outputs");
+            // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+            unsafe { hash_same_padded_blocks_groups::<2, 8>(group, group_outputs) };
+        }
+        4 => {
+            let group: [&[u8]; 4] = inputs[..4].try_into().expect("four mixed inputs");
+            let group_outputs: &mut [[u8; 16]; 4] =
+                (&mut outputs[..4]).try_into().expect("four mixed outputs");
+            // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+            unsafe { hash_same_padded_blocks_groups::<1, 4>(group, group_outputs) };
+        }
+        _ => unreachable!(),
+    }
+    lanes
 }
 
 /// Bench/test candidate for mixed lengths that still require the same number
@@ -454,6 +520,10 @@ pub(crate) fn hash_equal_len_run(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> 
     let len = inputs[0].len();
     debug_assert!(inputs.iter().all(|input| input.len() == len));
 
+    if equal_len_padding_profitable(inputs.len(), len) && hash_equal_len_padded(inputs, outputs) {
+        return inputs.len();
+    }
+
     let full = inputs.len() & !3usize;
     let mut twelve_groups = full / 12;
     let remainder = full % 12;
@@ -507,13 +577,30 @@ pub(crate) fn hash_equal_len_run(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> 
     start
 }
 
-#[cfg(any(test, feature = "bench-internals"))]
-pub(crate) fn hash_equal_len_padded_candidate(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
-    debug_assert_eq!(inputs.len(), outputs.len());
-    if inputs.is_empty() || !inputs.iter().all(|input| input.len() == inputs[0].len()) {
-        return false;
+#[inline(always)]
+fn equal_len_padding_profitable(lanes: usize, len: usize) -> bool {
+    let remainder = len & 63;
+    match lanes {
+        // Five lanes are one native NEON4 group plus one scalar residual in
+        // the old scheduler. N2 measurements cross over at the 56-byte
+        // padding boundary, are strongly positive for aligned blocks, and
+        // remain positive from 120 bytes onward. Skip the weak 65..119 area.
+        5 => len >= 120 || (len >= 56 && (remainder == 0 || remainder >= 56)),
+        // These lane counts win at every measured point from 55 bytes upward.
+        6 | 7 | 10 | 11 | 15 => len >= 55,
+        // Nine lanes are native NEON8 plus one scalar residual today. The
+        // padded NEON12 candidate is clearly positive on aligned blocks and
+        // when padding spills into another block; for longer messages the
+        // interleaved throughput advantage dominates. Avoid the measured
+        // 55/119-byte counterexamples and other unmeasured short remainders.
+        9 => len >= 256 || (len >= 56 && (remainder == 0 || remainder >= 56)),
+        // Padding 13/14 lanes to 16 regressed every measured N2 workload.
+        _ => false,
     }
+}
 
+fn hash_equal_len_padded(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    debug_assert_eq!(inputs.len(), outputs.len());
     match inputs.len() {
         5..=7 => {
             let padded_inputs: [&[u8]; 8] =
@@ -546,12 +633,22 @@ pub(crate) fn hash_equal_len_padded_candidate(inputs: &[&[u8]], outputs: &mut [[
     }
 }
 
+#[cfg(any(test, feature = "bench-internals"))]
+pub(crate) fn hash_equal_len_padded_candidate(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    debug_assert_eq!(inputs.len(), outputs.len());
+    if inputs.is_empty() || !inputs.iter().all(|input| input.len() == inputs[0].len()) {
+        return false;
+    }
+
+    hash_equal_len_padded(inputs, outputs)
+}
+
 #[cfg(test)]
 mod tests {
     use super::{
-        hash_equal_len_padded_candidate, hash_equal_len_run, hash_equal_len4, hash_equal_len8,
-        hash_equal_len12, hash_same_padded_blocks4, hash_same_padded_blocks8,
-        hash_same_padded_blocks12,
+        equal_len_padding_profitable, hash_equal_len_padded_candidate, hash_equal_len_run,
+        hash_equal_len4, hash_equal_len8, hash_equal_len12, hash_same_padded_blocks4,
+        hash_same_padded_blocks8, hash_same_padded_blocks12,
     };
 
     fn make_data<const LANES: usize>(len: usize) -> [std::vec::Vec<u8>; LANES] {
@@ -670,6 +767,35 @@ mod tests {
                     crate::scalar::hash(inputs[lane]),
                     "lanes={lanes}"
                 );
+            }
+        }
+    }
+
+    #[test]
+    fn native_neon_padding_policy_preserves_measured_crossovers() {
+        assert!(!equal_len_padding_profitable(5, 55));
+        assert!(equal_len_padding_profitable(5, 56));
+        assert!(!equal_len_padding_profitable(5, 119));
+        assert!(equal_len_padding_profitable(5, 120));
+        assert!(equal_len_padding_profitable(5, 128));
+        assert!(equal_len_padding_profitable(5, 1024));
+
+        for lanes in [6usize, 7, 10, 11, 15] {
+            assert!(!equal_len_padding_profitable(lanes, 54), "lanes={lanes}");
+            assert!(equal_len_padding_profitable(lanes, 55), "lanes={lanes}");
+        }
+
+        assert!(!equal_len_padding_profitable(9, 55));
+        assert!(equal_len_padding_profitable(9, 56));
+        assert!(equal_len_padding_profitable(9, 64));
+        assert!(!equal_len_padding_profitable(9, 119));
+        assert!(equal_len_padding_profitable(9, 120));
+        assert!(!equal_len_padding_profitable(9, 129));
+        assert!(equal_len_padding_profitable(9, 256));
+
+        for lanes in [13usize, 14] {
+            for len in [55usize, 56, 64, 120, 128, 1024, 65536] {
+                assert!(!equal_len_padding_profitable(lanes, len));
             }
         }
     }
