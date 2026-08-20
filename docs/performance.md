@@ -480,6 +480,21 @@ unproductive rewrites without new evidence.
 - Single-stream `<56 B` specialized compressors removed known-zero message-word
   additions but produced only about 0.3–0.6% end-to-end improvement in tiny
   cases and essentially no broader gain.
+- Replacing the retained short-block zero initialization with selective
+  `MaybeUninit` builders was rejected on the local AMD EPYC 9V74. Both a
+  variable tail-zero scheme and a fixed 16-byte suffix-store scheme improved
+  many 0-55 B lengths by roughly 1-5%, but reproducibly hit size-class cliffs
+  at lengths such as 20/24/28/36/40/44/52 B, with individual regressions of
+  roughly 4-19%. A brittle length table is not justified for this fixed-cost
+  optimization, so the simple one-block framing remains production policy.
+- An AArch64 under-filled-output experiment tried writing 5-15 real digests
+  directly from the native kernel instead of materializing the padded 8/12/16
+  output array. Although the wrapper frame fell from 512 B to 368 B and the
+  final copy disappeared, making the core output length dynamic polluted the
+  already-fast full NEON8 codegen: Rust 1.97.1 / LLVM 22 grew the function from
+  roughly 676 to 756 assembly lines, added six conditional branches, and
+  introduced extra partial-store/memcpy paths. It was rejected without spending
+  an N2 performance run; full native groups keep the fixed-output `ST4` path.
 - Replacing the short one-shot `copy_from_slice` with hand-written
   1/2/4/8/16-byte unaligned copy chunks did not improve 31/47-byte cases
   consistently and regressed the 55-byte boundary, so the standard slice copy
