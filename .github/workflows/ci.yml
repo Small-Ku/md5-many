@@ -133,7 +133,7 @@ jobs:
             sentinels: single-stream-1MiB|many-65536-bytes|x86-two-message-near-64KiB|x86-small-skew|?x86-small-batch
           - arch: aarch64
             runner: ubuntu-24.04-arm
-            sentinels: single-stream-1MiB|many-65536-bytes|lane-fill-64KiB|batch-scaling-8|batch-scaling-12|batch-scaling-16|batch-scaling-20|batch-scaling-28|mixed-short
+            sentinels: single-stream-1MiB|many-65536-bytes|lane-fill-64KiB|batch-scaling-8|batch-scaling-12|batch-scaling-16|batch-scaling-20|batch-scaling-28|mixed-short|mixed-4x~64KiB|mixed-8x~64KiB|mixed-12x~64KiB
     runs-on: ${{ matrix.runner }}
     timeout-minutes: 45
     env:
