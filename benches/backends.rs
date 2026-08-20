@@ -330,7 +330,7 @@ fn bench_aarch64_neon_scheduler(c: &mut Criterion) {
 
     let engine = md5_many::Md5Many::new();
     for &lanes in &[5usize, 16, 20, 28] {
-        for &len in &[55usize, 1024, 64 * 1024] {
+        for &len in &[55usize, 56, 64, 119, 120, 128, 256, 1024, 64 * 1024] {
             let data: Vec<Vec<u8>> = (0..lanes)
                 .map(|lane| {
                     (0..len)
@@ -370,6 +370,128 @@ fn bench_aarch64_neon_scheduler(c: &mut Criterion) {
 #[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
 fn bench_aarch64_neon_scheduler(_c: &mut Criterion) {}
 
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn bench_aarch64_neon_partial_candidates(c: &mut Criterion) {
+    use md5_many::bench_internals::md5_aarch64_neon_padded_equal;
+
+    let engine = md5_many::Md5Many::new();
+    for &lanes in &[5usize, 6, 7, 9, 10, 11, 13, 14, 15] {
+        for &len in &[55usize, 56, 64, 119, 120, 128, 256, 1024, 64 * 1024] {
+            let data: Vec<Vec<u8>> = (0..lanes)
+                .map(|lane| vec![(lane as u8).wrapping_mul(47); len])
+                .collect();
+            let inputs: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+            let mut production_outputs = vec![[0u8; 16]; lanes];
+            let mut padded_outputs = vec![[0u8; 16]; lanes];
+            let mut group =
+                c.benchmark_group(format!("backend-aarch64-neon-partial-{lanes}x{len}"));
+            group.sample_size(20);
+            group.warm_up_time(Duration::from_millis(200));
+            group.measurement_time(Duration::from_millis(600));
+            group.throughput(Throughput::Bytes((lanes * len) as u64));
+            group.bench_function("production", |b| {
+                b.iter(|| {
+                    engine.hash_many(black_box(&inputs), black_box(&mut production_outputs));
+                    black_box(production_outputs[0])
+                })
+            });
+            group.bench_function("padded-native", |b| {
+                b.iter(|| {
+                    assert!(md5_aarch64_neon_padded_equal(
+                        black_box(&inputs),
+                        black_box(&mut padded_outputs),
+                    ));
+                    black_box(padded_outputs[0])
+                })
+            });
+            group.finish();
+        }
+    }
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn bench_aarch64_neon_partial_candidates(_c: &mut Criterion) {}
+
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn bench_aarch64_neon_mixed_candidates(c: &mut Criterion) {
+    use md5_many::bench_internals::{
+        md5_aarch64_neon_mixed_same_blocks, md5_many_aarch64_fearless_neon,
+    };
+
+    let engine = md5_many::Md5Many::new();
+    let patterns: &[&[usize]] = &[
+        &[0, 1, 7, 15],
+        &[0, 1, 7, 15, 31, 47, 54, 55],
+        &[0, 1, 2, 3, 7, 15, 23, 31, 39, 47, 54, 55],
+        &[56, 57, 63, 64],
+        &[56, 57, 63, 64, 65, 79, 96, 119],
+        &[56, 57, 58, 63, 64, 65, 72, 80, 96, 104, 112, 119],
+        &[1016, 1017, 1023, 1024],
+        &[1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023],
+        &[
+            1016, 1017, 1018, 1019, 1020, 1021, 1022, 1023, 1024, 1025, 1026, 1027,
+        ],
+        &[65_528, 65_529, 65_530, 65_531],
+        &[
+            65_528, 65_529, 65_530, 65_531, 65_532, 65_533, 65_534, 65_535,
+        ],
+        &[
+            65_528, 65_529, 65_530, 65_531, 65_532, 65_533, 65_534, 65_535, 65_536, 65_537, 65_538,
+            65_539,
+        ],
+    ];
+
+    for &lengths in patterns {
+        let lanes = lengths.len();
+        let data: Vec<Vec<u8>> = lengths
+            .iter()
+            .enumerate()
+            .map(|(lane, &len)| vec![(lane as u8).wrapping_mul(53); len])
+            .collect();
+        let inputs: Vec<&[u8]> = data.iter().map(Vec::as_slice).collect();
+        let total: usize = lengths.iter().sum();
+        let mut fearless_outputs = vec![[0u8; 16]; lanes];
+        let mut production_outputs = vec![[0u8; 16]; lanes];
+        let mut native_outputs = vec![[0u8; 16]; lanes];
+        let mut group = c.benchmark_group(format!(
+            "backend-aarch64-neon-mixed-same-blocks-{lanes}x{}",
+            lengths.iter().copied().max().unwrap_or(0)
+        ));
+        group.sample_size(20);
+        group.warm_up_time(Duration::from_millis(200));
+        group.measurement_time(Duration::from_millis(600));
+        group.throughput(Throughput::Bytes(total as u64));
+        group.bench_function("fearless-neon", |b| {
+            b.iter(|| {
+                md5_many_aarch64_fearless_neon(
+                    black_box(&inputs),
+                    black_box(&mut fearless_outputs),
+                );
+                black_box(fearless_outputs[0])
+            })
+        });
+        group.bench_function("production", |b| {
+            b.iter(|| {
+                engine.hash_many(black_box(&inputs), black_box(&mut production_outputs));
+                black_box(production_outputs[0])
+            })
+        });
+        group.bench_function("native-same-blocks", |b| {
+            b.iter(|| {
+                assert!(md5_aarch64_neon_mixed_same_blocks(
+                    black_box(&inputs),
+                    black_box(&mut native_outputs),
+                ));
+                black_box(native_outputs[0])
+            })
+        });
+        group.finish();
+    }
+}
+
+#[cfg(not(all(target_arch = "aarch64", target_endian = "little")))]
+fn bench_aarch64_neon_mixed_candidates(_c: &mut Criterion) {}
+
 criterion_group!(
     benches,
     bench_short_framing,
@@ -382,6 +504,8 @@ criterion_group!(
     bench_aarch64_short,
     bench_aarch64_neon4,
     bench_aarch64_neon_occupancy,
-    bench_aarch64_neon_scheduler
+    bench_aarch64_neon_scheduler,
+    bench_aarch64_neon_partial_candidates,
+    bench_aarch64_neon_mixed_candidates
 );
 criterion_main!(benches);

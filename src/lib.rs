@@ -119,6 +119,40 @@ pub mod bench_internals {
         crate::simd_aarch64::hash_equal_len12(inputs)
     }
 
+    /// Force lane-duplication candidates for 5-7, 9-11, or 13-15 equal messages.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    pub fn md5_aarch64_neon_padded_equal(inputs: &[&[u8]], outputs: &mut [Md5Digest]) -> bool {
+        assert!(outputs.len() >= inputs.len());
+        crate::simd_aarch64::hash_equal_len_padded_candidate(inputs, &mut outputs[..inputs.len()])
+    }
+
+    /// Force native NEON for 4/8/12 mixed lengths with equal padded-block counts.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    pub fn md5_aarch64_neon_mixed_same_blocks(inputs: &[&[u8]], outputs: &mut [Md5Digest]) -> bool {
+        crate::simd_aarch64::hash_same_padded_blocks_candidate(inputs, outputs)
+    }
+
+    /// Force native NEON4 for four mixed lengths with equal padded-block counts.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[must_use]
+    pub fn md5_aarch64_neon_mixed4(inputs: [&[u8]; 4]) -> [Md5Digest; 4] {
+        crate::simd_aarch64::hash_same_padded_blocks4(inputs)
+    }
+
+    /// Force native NEON8 for eight mixed lengths with equal padded-block counts.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[must_use]
+    pub fn md5_aarch64_neon_mixed8(inputs: [&[u8]; 8]) -> [Md5Digest; 8] {
+        crate::simd_aarch64::hash_same_padded_blocks8(inputs)
+    }
+
+    /// Force native NEON12 for twelve mixed lengths with equal padded-block counts.
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    #[must_use]
+    pub fn md5_aarch64_neon_mixed12(inputs: [&[u8]; 12]) -> [Md5Digest; 12] {
+        crate::simd_aarch64::hash_same_padded_blocks12(inputs)
+    }
+
     /// Force the pre-native AArch64 Fearless SIMD batch path.
     #[cfg(all(feature = "std", target_arch = "aarch64", target_endian = "little"))]
     pub fn md5_many_aarch64_fearless_neon(inputs: &[&[u8]], outputs: &mut [Md5Digest]) {

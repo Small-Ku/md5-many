@@ -271,6 +271,146 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
     }
 }
 
+#[cfg(any(test, feature = "bench-internals"))]
+#[target_feature(enable = "neon")]
+fn hash_same_padded_blocks_groups<const GROUPS: usize, const LANES: usize>(
+    inputs: [&[u8]; LANES],
+    outputs: &mut [[u8; 16]; LANES],
+) {
+    assert_eq!(LANES, GROUPS * 4);
+    let padded_blocks = padded_blocks_for_len(inputs[0].len());
+    assert!(
+        inputs
+            .iter()
+            .all(|input| padded_blocks_for_len(input.len()) == padded_blocks)
+    );
+
+    let initial_state = STATE_INIT.map(|word| vdupq_n_u32(word));
+    let mut states: [[uint32x4_t; 4]; GROUPS] = core::array::from_fn(|_| initial_state);
+
+    // Keep the common full-data prefix zero-copy. Only the final one or two
+    // blocks can differ in where data ends and padding begins.
+    let common_full_blocks = inputs
+        .iter()
+        .map(|input| input.len() / 64)
+        .min()
+        .expect("at least one input");
+    for block_index in 0..common_full_blocks {
+        let offset = block_index * 64;
+        let words: [[uint32x4_t; 16]; GROUPS] = core::array::from_fn(|group| {
+            let blocks: [&[u8; 64]; 4] = core::array::from_fn(|lane| {
+                inputs[group * 4 + lane][offset..offset + 64]
+                    .try_into()
+                    .expect("common full MD5 block")
+            });
+            load_words(blocks)
+        });
+        compress_words_interleaved(&mut states, &words);
+    }
+
+    for block_index in common_full_blocks..padded_blocks {
+        let padded: [[[u8; 64]; 4]; GROUPS] = core::array::from_fn(|group| {
+            core::array::from_fn(|lane| {
+                build_padded_block(inputs[group * 4 + lane], padded_blocks, block_index)
+            })
+        });
+        let words: [[uint32x4_t; 16]; GROUPS] = core::array::from_fn(|group| {
+            let blocks: [&[u8; 64]; 4] = core::array::from_fn(|lane| &padded[group][lane]);
+            load_words(blocks)
+        });
+        compress_words_interleaved(&mut states, &words);
+    }
+
+    for group in 0..GROUPS {
+        let base = outputs[group * 4].as_mut_ptr().cast::<u32>();
+        // SAFETY: four consecutive 16-byte outputs provide the 64 writable
+        // bytes consumed by the structure store.
+        unsafe {
+            vst4q_u32(
+                base,
+                uint32x4x4_t(
+                    states[group][0],
+                    states[group][1],
+                    states[group][2],
+                    states[group][3],
+                ),
+            )
+        };
+    }
+}
+
+/// Bench/test candidate for mixed lengths that still require the same number
+/// of padded MD5 blocks. Unlike the equal-length production kernel, each lane
+/// synthesizes its own tail and length word while retaining native NEON
+/// transpose and round interleaving.
+#[cfg(any(test, feature = "bench-internals"))]
+pub(crate) fn hash_same_padded_blocks4(inputs: [&[u8]; 4]) -> [[u8; 16]; 4] {
+    let mut outputs = [[0u8; 16]; 4];
+    // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+    unsafe { hash_same_padded_blocks_groups::<1, 4>(inputs, &mut outputs) };
+    outputs
+}
+
+#[cfg(any(test, feature = "bench-internals"))]
+pub(crate) fn hash_same_padded_blocks8(inputs: [&[u8]; 8]) -> [[u8; 16]; 8] {
+    let mut outputs = [[0u8; 16]; 8];
+    // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+    unsafe { hash_same_padded_blocks_groups::<2, 8>(inputs, &mut outputs) };
+    outputs
+}
+
+#[cfg(any(test, feature = "bench-internals"))]
+pub(crate) fn hash_same_padded_blocks12(inputs: [&[u8]; 12]) -> [[u8; 16]; 12] {
+    let mut outputs = [[0u8; 16]; 12];
+    // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+    unsafe { hash_same_padded_blocks_groups::<3, 12>(inputs, &mut outputs) };
+    outputs
+}
+
+#[cfg(any(test, feature = "bench-internals"))]
+pub(crate) fn hash_same_padded_blocks_candidate(
+    inputs: &[&[u8]],
+    outputs: &mut [[u8; 16]],
+) -> bool {
+    if outputs.len() < inputs.len() || !matches!(inputs.len(), 4 | 8 | 12) {
+        return false;
+    }
+    let padded_blocks = padded_blocks_for_len(inputs[0].len());
+    if inputs
+        .iter()
+        .any(|input| padded_blocks_for_len(input.len()) != padded_blocks)
+    {
+        return false;
+    }
+
+    match inputs.len() {
+        4 => {
+            let group: [&[u8]; 4] = inputs.try_into().expect("four mixed inputs");
+            let group_outputs: &mut [[u8; 16]; 4] =
+                (&mut outputs[..4]).try_into().expect("four mixed outputs");
+            // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+            unsafe { hash_same_padded_blocks_groups::<1, 4>(group, group_outputs) };
+        }
+        8 => {
+            let group: [&[u8]; 8] = inputs.try_into().expect("eight mixed inputs");
+            let group_outputs: &mut [[u8; 16]; 8] =
+                (&mut outputs[..8]).try_into().expect("eight mixed outputs");
+            // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+            unsafe { hash_same_padded_blocks_groups::<2, 8>(group, group_outputs) };
+        }
+        12 => {
+            let group: [&[u8]; 12] = inputs.try_into().expect("twelve mixed inputs");
+            let group_outputs: &mut [[u8; 16]; 12] = (&mut outputs[..12])
+                .try_into()
+                .expect("twelve mixed outputs");
+            // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+            unsafe { hash_same_padded_blocks_groups::<3, 12>(group, group_outputs) };
+        }
+        _ => unreachable!(),
+    }
+    true
+}
+
 /// Hash four equal-length messages with a native AArch64 NEON kernel.
 #[cfg(any(test, feature = "bench-internals"))]
 pub(crate) fn hash_equal_len4(inputs: [&[u8]; 4]) -> [[u8; 16]; 4] {
@@ -367,9 +507,52 @@ pub(crate) fn hash_equal_len_run(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> 
     start
 }
 
+#[cfg(any(test, feature = "bench-internals"))]
+pub(crate) fn hash_equal_len_padded_candidate(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    debug_assert_eq!(inputs.len(), outputs.len());
+    if inputs.is_empty() || !inputs.iter().all(|input| input.len() == inputs[0].len()) {
+        return false;
+    }
+
+    match inputs.len() {
+        5..=7 => {
+            let padded_inputs: [&[u8]; 8] =
+                core::array::from_fn(|lane| inputs[core::cmp::min(lane, inputs.len() - 1)]);
+            let mut padded_outputs = [[0u8; 16]; 8];
+            // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+            unsafe { hash_equal_len_groups::<2, 8>(padded_inputs, &mut padded_outputs) };
+            outputs.copy_from_slice(&padded_outputs[..inputs.len()]);
+            true
+        }
+        9..=11 => {
+            let padded_inputs: [&[u8]; 12] =
+                core::array::from_fn(|lane| inputs[core::cmp::min(lane, inputs.len() - 1)]);
+            let mut padded_outputs = [[0u8; 16]; 12];
+            // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+            unsafe { hash_equal_len_groups::<3, 12>(padded_inputs, &mut padded_outputs) };
+            outputs.copy_from_slice(&padded_outputs[..inputs.len()]);
+            true
+        }
+        13..=15 => {
+            let padded_inputs: [&[u8]; 16] =
+                core::array::from_fn(|lane| inputs[core::cmp::min(lane, inputs.len() - 1)]);
+            let mut padded_outputs = [[0u8; 16]; 16];
+            let processed = hash_equal_len_run(&padded_inputs, &mut padded_outputs);
+            debug_assert_eq!(processed, 16);
+            outputs.copy_from_slice(&padded_outputs[..inputs.len()]);
+            true
+        }
+        _ => false,
+    }
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{hash_equal_len_run, hash_equal_len4, hash_equal_len8, hash_equal_len12};
+    use super::{
+        hash_equal_len_padded_candidate, hash_equal_len_run, hash_equal_len4, hash_equal_len8,
+        hash_equal_len12, hash_same_padded_blocks4, hash_same_padded_blocks8,
+        hash_same_padded_blocks12,
+    };
 
     fn make_data<const LANES: usize>(len: usize) -> [std::vec::Vec<u8>; LANES] {
         core::array::from_fn(|lane| {
@@ -438,6 +621,56 @@ mod tests {
                 expected(&data12),
                 "12-way len={len}"
             );
+        }
+    }
+
+    #[test]
+    fn native_neon_same_padded_block_count_matches_scalar() {
+        let data4 = [0usize, 1, 7, 55].map(|len| make_data::<1>(len)[0].clone());
+        let got4 = hash_same_padded_blocks4(data4.each_ref().map(|input| input.as_slice()));
+        assert_eq!(got4, expected(&data4));
+
+        let lens8 = [56usize, 57, 58, 63, 64, 65, 96, 119];
+        let data8: [std::vec::Vec<u8>; 8] = core::array::from_fn(|lane| {
+            (0..lens8[lane])
+                .map(|index| (index as u8).wrapping_add((lane as u8).wrapping_mul(23)))
+                .collect()
+        });
+        let got8 = hash_same_padded_blocks8(data8.each_ref().map(|input| input.as_slice()));
+        assert_eq!(got8, expected(&data8));
+
+        let lens12 = [
+            120usize, 121, 127, 128, 129, 143, 159, 160, 175, 180, 182, 183,
+        ];
+        let data12: [std::vec::Vec<u8>; 12] = core::array::from_fn(|lane| {
+            (0..lens12[lane])
+                .map(|index| (index as u8).wrapping_add((lane as u8).wrapping_mul(31)))
+                .collect()
+        });
+        let got12 = hash_same_padded_blocks12(data12.each_ref().map(|input| input.as_slice()));
+        assert_eq!(got12, expected(&data12));
+    }
+
+    #[test]
+    fn native_neon_padded_lane_candidates_match_scalar() {
+        for &lanes in &[5usize, 6, 7, 9, 10, 11, 13, 14, 15] {
+            let data: std::vec::Vec<std::vec::Vec<u8>> = (0..lanes)
+                .map(|lane| {
+                    (0..1024)
+                        .map(|index| (index as u8).wrapping_add((lane as u8).wrapping_mul(43)))
+                        .collect()
+                })
+                .collect();
+            let inputs: std::vec::Vec<&[u8]> = data.iter().map(std::vec::Vec::as_slice).collect();
+            let mut outputs = std::vec![[0u8; 16]; lanes];
+            assert!(hash_equal_len_padded_candidate(&inputs, &mut outputs));
+            for lane in 0..lanes {
+                assert_eq!(
+                    outputs[lane],
+                    crate::scalar::hash(inputs[lane]),
+                    "lanes={lanes}"
+                );
+            }
         }
     }
 }
