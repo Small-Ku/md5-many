@@ -121,6 +121,27 @@ fn intel_family_06_model_cf() -> bool {
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 #[inline]
+const fn intel_cf_prefer_zmm_small_equal_len(len: usize) -> bool {
+    len >= 512 || (len >= 128 && len.is_multiple_of(64))
+}
+
+#[cfg(all(test, any(target_arch = "x86", target_arch = "x86_64")))]
+mod x86_tuning_tests {
+    use super::intel_cf_prefer_zmm_small_equal_len;
+
+    #[test]
+    fn intel_cf_small_equal_crossover_boundaries_are_explicit() {
+        for len in [0, 64, 127, 129, 191, 193, 255, 257, 511] {
+            assert!(!intel_cf_prefer_zmm_small_equal_len(len), "len={len}");
+        }
+        for len in [128, 192, 256, 320, 384, 448, 512, 513, 1024] {
+            assert!(intel_cf_prefer_zmm_small_equal_len(len), "len={len}");
+        }
+    }
+}
+
+#[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
+#[inline]
 #[allow(unused_unsafe)]
 fn x86_has_bmi1() -> bool {
     use core::sync::atomic::{AtomicU8, Ordering};
@@ -10686,7 +10707,8 @@ fn hash_many_avx512(avx512: Avx512, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) 
         if same_len {
             if input_chunk.len() <= 8 {
                 let len = input_chunk[0].len();
-                let prefer_zmm = intel_family_06_model_cf() && len >= 512;
+                let prefer_zmm =
+                    intel_family_06_model_cf() && intel_cf_prefer_zmm_small_equal_len(len);
                 if prefer_zmm {
                     hash_equal_len_avx512_padded(avx512, input_chunk, output_chunk);
                 } else if input_chunk.len() == 8 {

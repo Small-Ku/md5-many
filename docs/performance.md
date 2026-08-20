@@ -167,9 +167,15 @@ well-occupied independent work -> AVX-512
 
 AVX-512 hosts normally keep 2–8-message batches on AVX2 because sparse ZMM
 lanes do not automatically compensate for wider-vector costs. The measured
-family 6/model `0xCF` host is a narrow exception: padded AVX-512 became useful
-for equal batches at 512 B and above and for mixed batches whose shortest
-message is at least 512 B.
+family 6/model `0xCF` host is a narrow exception. A 2026-08-21 forced-backend
+recheck on a Xeon Platinum 8573C refined the equal-length crossover: for 2-8
+messages, padded AVX-512 is consistently useful from 128 B when the message
+length is a multiple of 64, while irregular sub-512-byte lengths still have
+clear counterexamples. Representative aligned 128-448 B cases improved by
+roughly 6-16% over forced AVX2, including a separately repeated 5 x 192 B
+case that improved by 8.8-22.6%. Non-aligned equal batches retain the older
+512 B threshold. Mixed batches likewise keep the conservative rule that the
+shortest message must be at least 512 B.
 
 **Scheduler consequence:** keep this exception model-specific until another
 CPU is measured directly. The `x86-small-batch-*` Criterion groups exist to

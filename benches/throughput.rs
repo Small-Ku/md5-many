@@ -335,7 +335,7 @@ fn bench_x86_small_batch_dispatch(c: &mut Criterion) {
     let auto = Md5Many::from_level(Level::Avx512(avx512));
     let forced_avx2 = Md5Many::from_level(Level::Avx2(avx2));
 
-    for &size in &[1024usize, 64 * 1024] {
+    for &size in &[128usize, 192, 256, 512, 1024, 64 * 1024] {
         let storage: Vec<Vec<u8>> = (0..8)
             .map(|lane| vec![(lane as u8).wrapping_mul(43); size])
             .collect();
