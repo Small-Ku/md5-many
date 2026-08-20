@@ -343,7 +343,11 @@ mod tests {
     fn make_data<const LANES: usize>(len: usize) -> [std::vec::Vec<u8>; LANES] {
         core::array::from_fn(|lane| {
             (0..len)
-                .map(|index| (index as u8).wrapping_mul(17).wrapping_add(lane as u8 * 19))
+                .map(|index| {
+                    (index as u8)
+                        .wrapping_mul(17)
+                        .wrapping_add((lane as u8).wrapping_mul(19))
+                })
                 .collect()
         })
     }
@@ -358,7 +362,11 @@ mod tests {
             let data: std::vec::Vec<std::vec::Vec<u8>> = (0..lanes)
                 .map(|lane| {
                     (0..193)
-                        .map(|index| (index as u8).wrapping_mul(17).wrapping_add(lane as u8 * 19))
+                        .map(|index| {
+                            (index as u8)
+                                .wrapping_mul(17)
+                                .wrapping_add((lane as u8).wrapping_mul(19))
+                        })
                         .collect()
                 })
                 .collect();
