@@ -269,7 +269,7 @@ fn bench_aarch64_neon_occupancy(c: &mut Criterion) {
             group.bench_function("fearless-neon", |b| {
                 b.iter(|| {
                     engine.hash_many(black_box(&inputs), black_box(&mut generic_outputs));
-                    black_box(&generic_outputs)
+                    black_box(generic_outputs[0])
                 })
             });
             group.bench_function("native-neon4-groups", |b| {
@@ -279,7 +279,7 @@ fn bench_aarch64_neon_occupancy(c: &mut Criterion) {
                         let got = md5_aarch64_neon4(black_box(four));
                         native_outputs[group_index * 4..group_index * 4 + 4].copy_from_slice(&got);
                     }
-                    black_box(&native_outputs)
+                    black_box(native_outputs[0])
                 })
             });
             match lanes {
