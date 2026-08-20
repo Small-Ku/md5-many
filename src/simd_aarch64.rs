@@ -1,7 +1,7 @@
 use core::arch::aarch64::{
-    uint32x4_t, vaddq_u32, vbslq_u32, vcombine_u32, vdupq_n_u32, veorq_u32, vget_high_u32,
-    vget_low_u32, vld1q_u8, vornq_u32, vorrq_u32, vreinterpretq_u8_u32, vreinterpretq_u32_u8,
-    vshlq_n_u32, vshrq_n_u32, vst1q_u8, vtrn1q_u32, vtrn2q_u32,
+    uint32x4_t, uint32x4x4_t, vaddq_u32, vbslq_u32, vcombine_u32, vdupq_n_u32, veorq_u32,
+    vget_high_u32, vget_low_u32, vld1q_u8, vornq_u32, vorrq_u32, vreinterpretq_u32_u8, vshlq_n_u32,
+    vshrq_n_u32, vst4q_u32, vtrn1q_u32, vtrn2q_u32,
 };
 
 use crate::consts::{K, STATE_INIT};
@@ -216,21 +216,25 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
         compress_words_interleaved(&mut states, &words);
     }
 
-    // Transpose each group's SoA state back to one `[A, B, C, D]` vector
-    // per message. This module only exists on little-endian AArch64, so a
-    // direct vector store already has MD5's required byte order.
+    // Store the SoA state as four interleaved `[A, B, C, D]` digests.
+    // `vst4q_u32` maps directly to AArch64 ST4 and little-endian AArch64
+    // already has MD5's required byte order.
     let mut outputs = [[0u8; 16]; LANES];
     for group in 0..GROUPS {
-        let digest_rows = transpose4(states[group]);
-        for lane in 0..4 {
-            // SAFETY: each output has exactly 16 writable bytes.
-            unsafe {
-                vst1q_u8(
-                    outputs[group * 4 + lane].as_mut_ptr(),
-                    vreinterpretq_u8_u32(digest_rows[lane]),
-                )
-            };
-        }
+        let base = outputs[group * 4].as_mut_ptr().cast::<u32>();
+        // SAFETY: four consecutive 16-byte outputs provide exactly the 64
+        // writable bytes consumed by the structure store.
+        unsafe {
+            vst4q_u32(
+                base,
+                uint32x4x4_t(
+                    states[group][0],
+                    states[group][1],
+                    states[group][2],
+                    states[group][3],
+                ),
+            )
+        };
     }
     outputs
 }
