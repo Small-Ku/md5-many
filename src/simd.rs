@@ -1,3 +1,5 @@
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+use fearless_simd::Neon;
 use fearless_simd::{Level, Simd, SimdBase, dispatch};
 
 #[cfg(target_arch = "x86")]
@@ -10762,12 +10764,42 @@ fn hash_many_inner<SIMD: Simd>(simd: SIMD, inputs: &[&[u8]], outputs: &mut [[u8;
     }
 }
 
+#[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+fn hash_many_aarch64_neon(neon: Neon, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
+    // Native NEON measurements currently establish a crossover only for a
+    // whole equal-length batch. Keep mixed batches on the existing Fearless
+    // SIMD scheduler: splitting an alternating mixed batch into tiny equal-
+    // length runs would throw away its common-prefix SIMD work.
+    if inputs.len() < 4
+        || inputs
+            .get(1..)
+            .is_some_and(|rest| rest.iter().any(|input| input.len() != inputs[0].len()))
+    {
+        hash_many_inner(neon, inputs, outputs);
+        return;
+    }
+
+    let native = crate::simd_aarch64::hash_equal_len_run(inputs, outputs);
+    if native < inputs.len() {
+        // Fewer than four messages remain. Keep the existing generic
+        // NEON/scalar crossover rather than duplicating lanes without
+        // hardware evidence.
+        hash_many_inner(neon, &inputs[native..], &mut outputs[native..]);
+    }
+}
+
 pub(crate) fn hash_many_with_level(level: Level, inputs: &[&[u8]], outputs: &mut [[u8; 16]]) {
     assert!(
         outputs.len() >= inputs.len(),
         "output slice is shorter than input slice"
     );
     let outputs = &mut outputs[..inputs.len()];
+
+    #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
+    if let Level::Neon(neon) = level {
+        hash_many_aarch64_neon(neon, inputs, outputs);
+        return;
+    }
 
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     if let Some(avx512) = level.as_avx512() {

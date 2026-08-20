@@ -185,7 +185,8 @@ fn build_padded_block(input: &[u8], padded_blocks: usize, block_index: usize) ->
 #[target_feature(enable = "neon")]
 fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
     inputs: [&[u8]; LANES],
-) -> [[u8; 16]; LANES] {
+    outputs: &mut [[u8; 16]; LANES],
+) {
     assert_eq!(LANES, GROUPS * 4);
     let len = inputs[0].len();
     assert!(inputs.iter().all(|input| input.len() == len));
@@ -224,7 +225,6 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
     // Store the SoA state as four interleaved `[A, B, C, D]` digests.
     // `vst4q_u32` maps directly to AArch64 ST4 and little-endian AArch64
     // already has MD5's required byte order.
-    let mut outputs = [[0u8; 16]; LANES];
     for group in 0..GROUPS {
         let base = outputs[group * 4].as_mut_ptr().cast::<u32>();
         // SAFETY: four consecutive 16-byte outputs provide exactly the 64
@@ -241,33 +241,104 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
             )
         };
     }
-    outputs
 }
 
 /// Hash four equal-length messages with a native AArch64 NEON kernel.
-///
-/// This remains an experimental backend until hardware benchmarks establish
-/// its crossover against the generic Fearless SIMD NEON path.
 pub(crate) fn hash_equal_len4(inputs: [&[u8]; 4]) -> [[u8; 16]; 4] {
+    let mut outputs = [[0u8; 16]; 4];
     // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
-    unsafe { hash_equal_len_groups::<1, 4>(inputs) }
+    unsafe { hash_equal_len_groups::<1, 4>(inputs, &mut outputs) };
+    outputs
 }
 
 /// Hash eight equal-length messages as two round-interleaved NEON groups.
 pub(crate) fn hash_equal_len8(inputs: [&[u8]; 8]) -> [[u8; 16]; 8] {
+    let mut outputs = [[0u8; 16]; 8];
     // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
-    unsafe { hash_equal_len_groups::<2, 8>(inputs) }
+    unsafe { hash_equal_len_groups::<2, 8>(inputs, &mut outputs) };
+    outputs
 }
 
 /// Hash twelve equal-length messages as three round-interleaved NEON groups.
 pub(crate) fn hash_equal_len12(inputs: [&[u8]; 12]) -> [[u8; 16]; 12] {
+    let mut outputs = [[0u8; 16]; 12];
     // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
-    unsafe { hash_equal_len_groups::<3, 12>(inputs) }
+    unsafe { hash_equal_len_groups::<3, 12>(inputs, &mut outputs) };
+    outputs
+}
+
+/// Hash the largest profitable prefix of an equal-length message run.
+///
+/// Hardware measurements on Neoverse-N2 show that two and three
+/// round-interleaved four-lane dependency chains are substantially faster
+/// than issuing independent four-lane kernels serially. Prefer 12-way groups,
+/// except that a final 16-message region is split as 8+8 rather than 12+4.
+/// The returned count is always a multiple of four; a caller handles the
+/// remaining zero to three messages through its normal under-filled path.
+pub(crate) fn hash_equal_len_run(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> usize {
+    debug_assert!(outputs.len() >= inputs.len());
+    if inputs.len() < 4 {
+        return 0;
+    }
+    let len = inputs[0].len();
+    debug_assert!(inputs.iter().all(|input| input.len() == len));
+
+    let full = inputs.len() & !3usize;
+    let mut twelve_groups = full / 12;
+    let remainder = full % 12;
+    let (eight_groups, four_groups) = match remainder {
+        0 => (0, 0),
+        4 if twelve_groups != 0 => {
+            twelve_groups -= 1;
+            (2, 0)
+        }
+        4 => (0, 1),
+        8 => (1, 0),
+        _ => unreachable!("full lane count is a multiple of four"),
+    };
+
+    let mut start = 0;
+    for _ in 0..twelve_groups {
+        let group: [&[u8]; 12] = inputs[start..start + 12]
+            .try_into()
+            .expect("twelve equal-length inputs");
+        let group_outputs: &mut [[u8; 16]; 12] = (&mut outputs[start..start + 12])
+            .try_into()
+            .expect("twelve digest outputs");
+        // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+        unsafe { hash_equal_len_groups::<3, 12>(group, group_outputs) };
+        start += 12;
+    }
+    for _ in 0..eight_groups {
+        let group: [&[u8]; 8] = inputs[start..start + 8]
+            .try_into()
+            .expect("eight equal-length inputs");
+        let group_outputs: &mut [[u8; 16]; 8] = (&mut outputs[start..start + 8])
+            .try_into()
+            .expect("eight digest outputs");
+        // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+        unsafe { hash_equal_len_groups::<2, 8>(group, group_outputs) };
+        start += 8;
+    }
+    for _ in 0..four_groups {
+        let group: [&[u8]; 4] = inputs[start..start + 4]
+            .try_into()
+            .expect("four equal-length inputs");
+        let group_outputs: &mut [[u8; 16]; 4] = (&mut outputs[start..start + 4])
+            .try_into()
+            .expect("four digest outputs");
+        // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
+        unsafe { hash_equal_len_groups::<1, 4>(group, group_outputs) };
+        start += 4;
+    }
+
+    debug_assert_eq!(start, full);
+    start
 }
 
 #[cfg(test)]
 mod tests {
-    use super::{hash_equal_len4, hash_equal_len8, hash_equal_len12};
+    use super::{hash_equal_len_run, hash_equal_len4, hash_equal_len8, hash_equal_len12};
 
     fn make_data<const LANES: usize>(len: usize) -> [std::vec::Vec<u8>; LANES] {
         core::array::from_fn(|lane| {
@@ -279,6 +350,30 @@ mod tests {
 
     fn expected<const LANES: usize>(data: &[std::vec::Vec<u8>; LANES]) -> [[u8; 16]; LANES] {
         data.each_ref().map(|input| crate::scalar::hash(input))
+    }
+
+    #[test]
+    fn native_neon_scheduler_compositions_match_scalar() {
+        for &lanes in &[4usize, 5, 8, 9, 12, 13, 16, 20, 24, 28, 32] {
+            let data: std::vec::Vec<std::vec::Vec<u8>> = (0..lanes)
+                .map(|lane| {
+                    (0..193)
+                        .map(|index| (index as u8).wrapping_mul(17).wrapping_add(lane as u8 * 19))
+                        .collect()
+                })
+                .collect();
+            let inputs: std::vec::Vec<&[u8]> = data.iter().map(std::vec::Vec::as_slice).collect();
+            let mut outputs = std::vec![[0u8; 16]; lanes];
+            let processed = hash_equal_len_run(&inputs, &mut outputs);
+            assert_eq!(processed, lanes & !3usize, "lanes={lanes}");
+            for lane in 0..processed {
+                assert_eq!(
+                    outputs[lane],
+                    crate::scalar::hash(inputs[lane]),
+                    "lanes={lanes}, lane={lane}"
+                );
+            }
+        }
     }
 
     #[test]
