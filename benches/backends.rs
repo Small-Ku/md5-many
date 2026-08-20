@@ -217,7 +217,7 @@ fn bench_aarch64_neon4(c: &mut Criterion) {
     for &len in &[0usize, 55, 64, 1024, 64 * 1024, 1024 * 1024] {
         let data: [Vec<u8>; 4] = core::array::from_fn(|lane| {
             (0..len)
-                .map(|index| (index as u8).wrapping_add(lane as u8 * 41))
+                .map(|index| (index as u8).wrapping_add((lane as u8).wrapping_mul(41)))
                 .collect()
         });
         let inputs = data.each_ref().map(|input| input.as_slice());
@@ -262,7 +262,7 @@ fn bench_aarch64_neon_occupancy(c: &mut Criterion) {
             let data: Vec<Vec<u8>> = (0..lanes)
                 .map(|lane| {
                     (0..len)
-                        .map(|index| (index as u8).wrapping_add(lane as u8 * 37))
+                        .map(|index| (index as u8).wrapping_add((lane as u8).wrapping_mul(37)))
                         .collect()
                 })
                 .collect();
@@ -334,7 +334,7 @@ fn bench_aarch64_neon_scheduler(c: &mut Criterion) {
             let data: Vec<Vec<u8>> = (0..lanes)
                 .map(|lane| {
                     (0..len)
-                        .map(|index| (index as u8).wrapping_add(lane as u8 * 29))
+                        .map(|index| (index as u8).wrapping_add((lane as u8).wrapping_mul(29)))
                         .collect()
                 })
                 .collect();
