@@ -19,6 +19,7 @@ Inputs arrive message-major (AoS). Native x86 kernels load one 64-byte block per
 
 - AVX2: 8-way native, 16-way dual, 24-way triple.
 - AVX-512: 16-way native, 32-way dual, 48-way triple.
+- AArch64: on measured Neoverse-N2 hardware, production single-stream uses the portable Rust compressor rather than the hand-scheduled GPR path. Equal-length batches use native NEON 4/8/12-way kernels, with 8/12-way groups round-interleaved for ILP. Prefer 12-way groups, except schedule a final 16-message region as 8+8 rather than 12+4. Keep mixed-length batches on the generic Fearless SIMD scheduler until a native mixed path has direct hardware evidence.
 - Equal-length padding uses `build_padded_block` rather than byte-at-a-time synthesis.
 - A pure padding block shared by every lane is parsed once and broadcast instead of loaded/transposed N times.
 - Under-filled AVX2 dual/triple candidates duplicate a real lane rather than falling into a small tail: 9-15 messages use padded dual, 17-23 padded triple, and 26-31 equal/near-mixed batches use two dual kernels.

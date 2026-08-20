@@ -353,11 +353,30 @@ percent. A representative run measured approximately:
 | RustCrypto `md-5` reference | ~696.0 MiB/s |
 | 4-way 64 KiB multi-buffer | ~963 MiB/s |
 
-The reference comparison is an **investigation signal, not a dispatch result**.
-It compares different implementations and does not isolate the hand-scheduled
-AArch64 compressor from `md5-many`'s portable scalar fallback. A direct forced
-portable-vs-hand-tuned AArch64 A/B is still required before changing the
-single-stream backend.
+A same-binary backend probe on 2026-08-20 resolved the single-stream question.
+On the same reported Neoverse-N2 host, the portable Rust compressor beat the
+hand-scheduled AArch64 GPR compressor at every measured size: 173.52 vs
+177.89 ns at 64 B, 1.4933 vs 1.5274 us at 1 KiB, 90.238 vs 92.154 us at
+64 KiB, and about 693.2 vs 678.1 MiB/s at 1 MiB. The 0-55 B short probes
+showed the same direction. Production AArch64 single-stream dispatch therefore
+uses the portable compressor; the GPR path remains available only as a backend
+comparison hook.
+
+The same probe established a native equal-length NEON crossover. At 4 lanes,
+the native kernel measured 730.9 MiB/s vs 346.6 MiB/s for Fearless SIMD at
+55 B, 951.3 vs 833.4 MiB/s at 1 KiB, and 1018.6 vs 965.8 MiB/s at 64 KiB.
+Round-interleaving independent four-lane chains was substantially stronger:
+8-way reached 1.676 GiB/s at 1 KiB and 1.837 GiB/s at 64 KiB; 12-way reached
+2.041 GiB/s and 2.206 GiB/s respectively. Serial native-NEON4 grouping stayed
+near 952 MiB/s at 1 KiB and 1.016 GiB/s at 64 KiB, confirming that the extra
+8/12-way gain is genuine inter-chain ILP rather than only a better transpose.
+
+Production AArch64 batch dispatch consequently uses native NEON only when the
+whole input batch is equal-length and has at least four messages. It consumes
+12-way groups preferentially, except a 16-message region is scheduled as 8+8
+to avoid a final 4-way group; remaining one to three lanes use the existing
+generic path. Mixed-length batches intentionally remain on Fearless SIMD until
+a native mixed scheduler has direct hardware evidence.
 
 The hosted runner model is also not a platform contract; future GitHub runners
 may expose different ARM CPUs.
@@ -403,15 +422,12 @@ production dispatch:
   unpacks and one 16-byte store. AMD measurements are mixed/noisy and are not a
   valid basis for the Intel-preferred path, so `backend-x86-avx512-digest-store`
   keeps both epilogues available for an Intel same-binary A/B.
-- AArch64 exposes forced portable and hand-scheduled GPR one-shot paths plus
-  native 4-way, 8-way, and 12-way equal-length NEON candidates. The 8-way and
-  12-way kernels interleave two or three independent 4-lane dependency chains
-  round-by-round instead of merely invoking the 4-way kernel serially. The
-  occupancy benchmark keeps the serial 4-way grouping as a control, so native
-  ARM measurements can distinguish a better transpose/kernel from genuine ILP
-  gained by interleaving. `backend-aarch64-*` must establish the single-stream
-  winner, native-NEON crossover, and useful interleave depth before any of
-  these candidates enter production dispatch.
+- AArch64 backend probes retain forced portable/GPR and forced Fearless/native
+  NEON controls even though the measured Neoverse-N2 results have now moved
+  portable single-stream and equal-length native NEON into production. These
+  probes remain useful for detecting a future runner/microarchitecture where
+  the crossover differs. A separate scheduler benchmark covers 5/16/20/28
+  lanes so production group composition can be checked directly.
 
 ## Experiments rejected so far
 
