@@ -159,6 +159,18 @@ fn padded_blocks_for_len(len: usize) -> usize {
     len / 64 + if (len & 63) <= 55 { 1 } else { 2 }
 }
 
+#[target_feature(enable = "neon")]
+fn shared_final_padding_words(len: usize, marker_in_final_block: bool) -> [uint32x4_t; 16] {
+    let mut words = [vdupq_n_u32(0); 16];
+    if marker_in_final_block {
+        words[0] = vdupq_n_u32(0x80);
+    }
+    let bit_len = (len as u64).wrapping_mul(8);
+    words[14] = vdupq_n_u32(bit_len as u32);
+    words[15] = vdupq_n_u32((bit_len >> 32) as u32);
+    words
+}
+
 #[inline(always)]
 fn build_padded_block(input: &[u8], padded_blocks: usize, block_index: usize) -> [u8; 64] {
     let mut block = [0u8; 64];
@@ -209,7 +221,23 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
     }
 
     let padded_blocks = padded_blocks_for_len(len);
+    let remainder = len & 63;
     for block_index in full_blocks..padded_blocks {
+        let is_final_block = block_index + 1 == padded_blocks;
+        let shared_final_block = is_final_block && (remainder == 0 || remainder > 55);
+        if shared_final_block {
+            // If the input ended exactly at a block boundary, this final block
+            // contains only the 0x80 marker and length. If the tail exceeded
+            // 55 bytes, the marker was already placed in the preceding block
+            // and this final block contains only the length. Either way every
+            // lane has identical message words, so broadcast them once instead
+            // of synthesizing and transposing one block per message.
+            let shared = shared_final_padding_words(len, remainder == 0);
+            let words: [[uint32x4_t; 16]; GROUPS] = core::array::from_fn(|_| shared);
+            compress_words_interleaved(&mut states, &words);
+            continue;
+        }
+
         let padded: [[[u8; 64]; 4]; GROUPS] = core::array::from_fn(|group| {
             core::array::from_fn(|lane| {
                 build_padded_block(inputs[group * 4 + lane], padded_blocks, block_index)
