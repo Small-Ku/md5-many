@@ -67,7 +67,12 @@ fn compress_words_interleaved<const GROUPS: usize>(
                 let mixed = mix!($which, $b[group], $c[group], $d[group]);
                 let mut value = vaddq_u32($a[group], mixed);
                 value = vaddq_u32(value, vdupq_n_u32(K[$round]));
-                value = vaddq_u32(value, words[group][$word]);
+                // Keep each message-word load at the round that consumes it.
+                // LLVM otherwise hoists distant group loads and spills them
+                // back to the stack in the 8/12-way interleaved candidates.
+                let message_word =
+                    unsafe { core::ptr::read_volatile(core::ptr::addr_of!(words[group][$word])) };
+                value = vaddq_u32(value, message_word);
                 let rotated = vorrq_u32(
                     vshlq_n_u32::<$shift>(value),
                     vshrq_n_u32::<{ 32 - $shift }>(value),
