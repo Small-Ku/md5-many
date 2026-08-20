@@ -14,7 +14,7 @@
 //! password hashing, or adversarial integrity. This crate targets legacy
 //! interoperability and non-adversarial checksumming workloads.
 
-#[cfg(feature = "std")]
+#[cfg(any(feature = "std", test))]
 extern crate std;
 
 mod consts;

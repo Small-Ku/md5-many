@@ -10790,6 +10790,7 @@ fn hash_many_aarch64_neon(neon: Neon, inputs: &[&[u8]], outputs: &mut [[u8; 16]]
 
 #[cfg(all(
     feature = "bench-internals",
+    feature = "std",
     target_arch = "aarch64",
     target_endian = "little"
 ))]

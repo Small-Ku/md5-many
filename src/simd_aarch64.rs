@@ -272,6 +272,7 @@ fn hash_equal_len_groups<const GROUPS: usize, const LANES: usize>(
 }
 
 /// Hash four equal-length messages with a native AArch64 NEON kernel.
+#[cfg(any(test, feature = "bench-internals"))]
 pub(crate) fn hash_equal_len4(inputs: [&[u8]; 4]) -> [[u8; 16]; 4] {
     let mut outputs = [[0u8; 16]; 4];
     // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
@@ -280,6 +281,7 @@ pub(crate) fn hash_equal_len4(inputs: [&[u8]; 4]) -> [[u8; 16]; 4] {
 }
 
 /// Hash eight equal-length messages as two round-interleaved NEON groups.
+#[cfg(any(test, feature = "bench-internals"))]
 pub(crate) fn hash_equal_len8(inputs: [&[u8]; 8]) -> [[u8; 16]; 8] {
     let mut outputs = [[0u8; 16]; 8];
     // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
@@ -288,6 +290,7 @@ pub(crate) fn hash_equal_len8(inputs: [&[u8]; 8]) -> [[u8; 16]; 8] {
 }
 
 /// Hash twelve equal-length messages as three round-interleaved NEON groups.
+#[cfg(any(test, feature = "bench-internals"))]
 pub(crate) fn hash_equal_len12(inputs: [&[u8]; 12]) -> [[u8; 16]; 12] {
     let mut outputs = [[0u8; 16]; 12];
     // SAFETY: Advanced SIMD (NEON) is part of the AArch64 baseline.
