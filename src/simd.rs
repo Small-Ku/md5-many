@@ -127,7 +127,10 @@ const fn intel_cf_prefer_zmm_small_equal_len(len: usize) -> bool {
 
 #[cfg(all(test, any(target_arch = "x86", target_arch = "x86_64")))]
 mod x86_tuning_tests {
-    use super::{X86TuningClass, dual_scalar_pair_profitable, intel_cf_prefer_zmm_small_equal_len};
+    use super::{
+        X86TuningClass, dual_scalar_pair_profitable, intel_cf_prefer_zmm_small_equal_len,
+        three_dual_scalar_profitable,
+    };
 
     #[test]
     fn intel_cf_small_equal_crossover_boundaries_are_explicit() {
@@ -218,6 +221,67 @@ mod x86_tuning_tests {
             65_536,
             false
         ));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn three_stream_dual_policy_separates_amd_and_intel_shapes() {
+        use X86TuningClass::{AmdFamily19h, Generic, IntelFamily06ModelCf};
+
+        assert!(three_dual_scalar_profitable(AmdFamily19h, 2, 9, 65));
+        assert!(three_dual_scalar_profitable(IntelFamily06ModelCf, 2, 9, 65));
+        assert!(!three_dual_scalar_profitable(AmdFamily19h, 8, 64, 65));
+        assert!(three_dual_scalar_profitable(
+            IntelFamily06ModelCf,
+            8,
+            64,
+            65
+        ));
+        assert!(three_dual_scalar_profitable(
+            IntelFamily06ModelCf,
+            10,
+            64,
+            65
+        ));
+        assert!(!three_dual_scalar_profitable(
+            IntelFamily06ModelCf,
+            11,
+            64,
+            65
+        ));
+        assert!(!three_dual_scalar_profitable(
+            IntelFamily06ModelCf,
+            16,
+            64,
+            65
+        ));
+        assert!(!three_dual_scalar_profitable(Generic, 2, 9, 65));
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn intel_three_stream_dual_candidate_matches_scalar() {
+        if !super::x86_has_bmi1() {
+            return;
+        }
+
+        let short = std::vec![0x13u8; 1024];
+        let middle = std::vec![0x57u8; 8192];
+        let long = std::vec![0xa9u8; 8192];
+        let inputs = [short.as_slice(), middle.as_slice(), long.as_slice()];
+        let mut outputs = [[0u8; 16]; 3];
+        assert!(super::hash_three_dual_scalar_impl(
+            X86TuningClass::IntelFamily06ModelCf,
+            &inputs,
+            &mut outputs,
+        ));
+        for lane in 0..3 {
+            assert_eq!(
+                outputs[lane],
+                crate::scalar::hash(inputs[lane]),
+                "lane={lane}"
+            );
+        }
     }
 }
 
@@ -315,12 +379,33 @@ fn prefer_dual_scalar_pair(inputs: &[&[u8]]) -> bool {
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-fn hash_three_dual_scalar_impl(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+fn three_dual_scalar_profitable(
+    class: X86TuningClass,
+    shortest_blocks: usize,
+    middle_blocks: usize,
+    longest_blocks: usize,
+) -> bool {
+    match class {
+        X86TuningClass::AmdFamily19h => middle_blocks.saturating_mul(4) <= longest_blocks,
+        X86TuningClass::IntelFamily06ModelCf => {
+            middle_blocks.saturating_mul(4) <= longest_blocks
+                || shortest_blocks.saturating_mul(6) <= middle_blocks
+        }
+        X86TuningClass::Generic => false,
+    }
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn hash_three_dual_scalar_impl(
+    class: X86TuningClass,
+    inputs: &[&[u8]],
+    outputs: &mut [[u8; 16]],
+) -> bool {
     if !x86_has_bmi1() || inputs.len() != 3 {
         return false;
     }
 
-    // Pair the two longest messages to maximize the common dual-GPR prefix.
     let mut order = [0usize, 1, 2];
     let blocks = [
         padded_blocks_for_len(inputs[0].len()),
@@ -337,11 +422,7 @@ fn hash_three_dual_scalar_impl(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bo
         order.swap(0, 1);
     }
 
-    // Sparse AVX2 remains decisively better for equal and near-equal triples.
-    // Split only when at most one lane carries more than a quarter of the
-    // longest lane's padded-block work; this crossover is stable from 4 KiB
-    // through 64 KiB on the measured AMD Family 19h host.
-    if blocks[order[1]].saturating_mul(4) > blocks[order[2]] {
+    if !three_dual_scalar_profitable(class, blocks[order[0]], blocks[order[1]], blocks[order[2]]) {
         return false;
     }
 
@@ -357,12 +438,12 @@ fn hash_three_dual_scalar_impl(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bo
 #[cfg(target_arch = "x86_64")]
 #[inline]
 fn hash_three_dual_scalar(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
-    amd_family_19h() && hash_three_dual_scalar_impl(inputs, outputs)
+    hash_three_dual_scalar_impl(x86_tuning_class(), inputs, outputs)
 }
 
 #[cfg(all(feature = "bench-internals", target_arch = "x86_64"))]
 pub(crate) fn hash_three_dual_scalar_for_bench(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
-    hash_three_dual_scalar_impl(inputs, outputs)
+    hash_three_dual_scalar_impl(x86_tuning_class(), inputs, outputs)
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]

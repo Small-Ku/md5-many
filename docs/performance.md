@@ -210,6 +210,30 @@ larger message has at most 32 padded blocks, or when both messages are at least
 pairs retain the existing SIMD scheduler. AMD family 19h keeps its separately
 measured tiny/1:16 policy and does not take the Intel AVX-512-tail rule.
 
+### Intel family 6/model `0xCF` three-message skew
+
+The two-longest-plus-one composition also has a model-specific Intel crossover.
+For sorted padded workloads `a <= b <= c`, the AMD rule remains `b * 4 <= c`.
+On Xeon Platinum 8573C, pairing the two longest messages also remained
+profitable when the longest lanes were close together as long as the shortest
+lane was sufficiently small:
+
+```text
+a * 6 <= b
+```
+
+A same-process sweep with `b == c` measured the candidate at `a ~= b/6` from
+1 KiB through 1 MiB; it remained about 1-13% faster. Relaxing to `a ~= b/5`
+was already neutral/slightly slower at 64 KiB and 1 MiB, while `a ~= b/4`
+regressed by roughly 2-5%. Repeating the `1:6` boundary with `b/c` ratios of
+1:2, 3:4, and 9:10 still improved by about 7-21% from 8 KiB through 1 MiB.
+
+**Scheduler consequence:** family 6/model `0xCF` may pair the two longest
+messages when either the existing quarter-gap condition holds or the shortest
+padded workload is at most one sixth of the second-longest. The remaining lane
+uses the Intel-preferred single-stream backend. AMD family 19h keeps only its
+separately measured quarter-gap rule.
+
 ### Intel family 6/model `0xCF` two-stream incremental path
 
 The same dual-GPR BMI1 schedule also applies to block-aligned incremental
