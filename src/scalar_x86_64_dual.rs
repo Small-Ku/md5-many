@@ -190,6 +190,35 @@ pub(crate) unsafe fn compress_block_pair_bmi1(
     states[1][3] = initial1[3].wrapping_add(d1);
 }
 
+/// Compress equal-length block-aligned fragments for exactly two independent
+/// chaining states using the dual-GPR BMI1 schedule.
+///
+/// # Safety
+///
+/// The caller must ensure BMI1 is available. Both inputs must have identical
+/// lengths that are multiples of 64 bytes.
+#[target_feature(enable = "bmi1")]
+pub(crate) unsafe fn compress_blocks_pair_bmi1(
+    states: &mut [[u32; STATE_WORDS]; 2],
+    inputs: [&[u8]; 2],
+) {
+    debug_assert_eq!(inputs[0].len(), inputs[1].len());
+    debug_assert!(inputs[0].len().is_multiple_of(BLOCK_SIZE));
+
+    let blocks = inputs[0].len() / BLOCK_SIZE;
+    for block_index in 0..blocks {
+        let offset = block_index * BLOCK_SIZE;
+        let block0: &[u8; BLOCK_SIZE] = inputs[0][offset..offset + BLOCK_SIZE]
+            .try_into()
+            .expect("full MD5 block");
+        let block1: &[u8; BLOCK_SIZE] = inputs[1][offset..offset + BLOCK_SIZE]
+            .try_into()
+            .expect("full MD5 block");
+        // SAFETY: inherited BMI1 precondition; both references are full blocks.
+        unsafe { compress_block_pair_bmi1(states, [block0, block1]) };
+    }
+}
+
 #[inline(always)]
 fn padded_blocks_for_len(len: usize) -> usize {
     let full_blocks = len / BLOCK_SIZE;

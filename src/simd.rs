@@ -253,6 +253,12 @@ pub(crate) fn x86_bmi1_supported_for_bench() -> bool {
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
+pub(crate) fn intel_cf_dual_incremental_available() -> bool {
+    x86_has_bmi1() && x86_tuning_class() == X86TuningClass::IntelFamily06ModelCf
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
 fn dual_scalar_pair_profitable(
     class: X86TuningClass,
     len0: usize,
@@ -309,8 +315,8 @@ fn prefer_dual_scalar_pair(inputs: &[&[u8]]) -> bool {
 
 #[cfg(target_arch = "x86_64")]
 #[inline]
-fn hash_three_dual_scalar(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
-    if !amd_family_19h() || !x86_has_bmi1() || inputs.len() != 3 {
+fn hash_three_dual_scalar_impl(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    if !x86_has_bmi1() || inputs.len() != 3 {
         return false;
     }
 
@@ -346,6 +352,17 @@ fn hash_three_dual_scalar(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
     outputs[order[2]] = pair[1];
     outputs[order[0]] = scalar::hash(inputs[order[0]]);
     true
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn hash_three_dual_scalar(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    amd_family_19h() && hash_three_dual_scalar_impl(inputs, outputs)
+}
+
+#[cfg(all(feature = "bench-internals", target_arch = "x86_64"))]
+pub(crate) fn hash_three_dual_scalar_for_bench(inputs: &[&[u8]], outputs: &mut [[u8; 16]]) -> bool {
+    hash_three_dual_scalar_impl(inputs, outputs)
 }
 
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
@@ -9692,6 +9709,21 @@ pub(crate) fn compress_md5_states_blocks_validated_with_level(
     debug_assert!(inputs.iter().all(|input| input.len() == inputs[0].len()));
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
+        #[cfg(target_arch = "x86_64")]
+        if streams.len() == 2 && intel_cf_dual_incremental_available() {
+            let mut pair = [streams[0].state, streams[1].state];
+            // SAFETY: the feature helper verifies BMI1; the caller validated
+            // equal block-aligned input lengths.
+            unsafe {
+                crate::scalar_x86_64_dual::compress_blocks_pair_bmi1(
+                    &mut pair,
+                    [inputs[0], inputs[1]],
+                )
+            };
+            streams[0].state = pair[0];
+            streams[1].state = pair[1];
+            return;
+        }
         if streams.len() == 48
             && let Some(avx512) = level.as_avx512()
         {
@@ -9775,6 +9807,24 @@ pub(crate) fn compress_many_blocks_with_level(
     // AVX-512 lanes, for example.
     #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
     {
+        #[cfg(target_arch = "x86_64")]
+        if states.len() == 2
+            && x86_has_bmi1()
+            && x86_tuning_class() == X86TuningClass::IntelFamily06ModelCf
+        {
+            let mut pair = [states[0], states[1]];
+            // SAFETY: the CPUID check above verifies BMI1; this function has
+            // already validated equal block-aligned input lengths.
+            unsafe {
+                crate::scalar_x86_64_dual::compress_blocks_pair_bmi1(
+                    &mut pair,
+                    [inputs[0], inputs[1]],
+                )
+            };
+            states[0] = pair[0];
+            states[1] = pair[1];
+            return;
+        }
         if states.len() == 48
             && let Some(avx512) = level.as_avx512()
         {

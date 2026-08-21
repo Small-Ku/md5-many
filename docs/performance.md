@@ -210,6 +210,23 @@ larger message has at most 32 padded blocks, or when both messages are at least
 pairs retain the existing SIMD scheduler. AMD family 19h keeps its separately
 measured tiny/1:16 policy and does not take the Intel AVX-512-tail rule.
 
+### Intel family 6/model `0xCF` two-stream incremental path
+
+The same dual-GPR BMI1 schedule also applies to block-aligned incremental
+updates, where exactly two active streams previously occupied sparse SSE2/SIMD
+lanes. A Xeon Platinum 8573C same-host before/after run hashed 64 KiB per
+stream through the public `Md5Many::update_many` API. Moving the equal
+block-aligned two-stream hot path directly to the dual-GPR state compressor
+reduced median update time from about 230 us to 117 us with 64-byte chunks
+(~49%), from 180 us to 103 us with 256-byte chunks (~43%), and by about 40-41%
+with 4 KiB or 64 KiB chunks.
+
+The fast path is deliberately narrow: family 6/model `0xCF`, BMI1, exactly two
+streams, both chaining states block-aligned, and an equal non-empty update
+length divisible by 64. Partial-buffer and unequal update shapes retain the
+existing generic incremental scheduler. `x86-incremental-two-streams-*`
+Criterion groups keep the chunk-size crossover visible in future runs.
+
 ### Incremental eight-stream AVX2 on Intel Xeon Platinum 8370C
 
 Incremental multi-stream hashing was measured on an Intel Xeon Platinum 8370C

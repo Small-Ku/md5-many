@@ -220,6 +220,12 @@ pub mod bench_internals {
         unsafe { crate::scalar_x86_64_dual::hash_pair_bmi1(inputs) }
     }
 
+    /// Force the measured three-message dual-GPR skew candidate.
+    #[cfg(target_arch = "x86_64")]
+    pub fn md5_x86_three_dual_bmi1(inputs: [&[u8]; 3], outputs: &mut [Md5Digest; 3]) -> bool {
+        crate::simd::hash_three_dual_scalar_for_bench(&inputs, outputs)
+    }
+
     /// Force the x86-64 NoLEA scalar single-stream backend.
     #[cfg(target_arch = "x86_64")]
     #[must_use]
@@ -1075,6 +1081,8 @@ mod tests {
                 );
             }
         }
+
+        check(Md5Many::new(), 2);
 
         let detected = fearless_simd::Level::new();
         if let Some(avx2) = detected.as_avx2() {

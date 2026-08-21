@@ -304,6 +304,18 @@ pub(crate) fn update_many_with_level(level: Level, streams: &mut [Md5State], inp
     let lanes = simd::lanes_with_level(level);
     debug_assert!((1..=MAX_LANES).contains(&lanes));
 
+    #[cfg(target_arch = "x86_64")]
+    if streams.len() == 2 && simd::intel_cf_dual_incremental_available() {
+        let input_len = inputs[0].len();
+        if input_len != 0
+            && input_len.is_multiple_of(64)
+            && try_lockstep_aligned_exact::<2>(streams, inputs, input_len)
+        {
+            simd::compress_md5_states_blocks_validated_with_level(level, streams, inputs);
+            return;
+        }
+    }
+
     // The dominant streaming shape is lockstep: one update call supplies the
     // same block-aligned fragment to one, two, or three native SIMD groups.
     // Handle the whole slice here so a 64-byte update does not pay the generic

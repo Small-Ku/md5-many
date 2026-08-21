@@ -114,6 +114,44 @@ fn bench_incremental_many(c: &mut Criterion) {
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+fn bench_x86_incremental_two_streams(c: &mut Criterion) {
+    let engine = Md5Many::new();
+    const SIZE: usize = 64 * 1024;
+    let storage = [vec![0x31; SIZE], vec![0xa7; SIZE]];
+    let mut states = [Md5State::new(); 2];
+
+    for &chunk_size in &[64usize, 256, 4 * 1024, SIZE] {
+        let chunks: Vec<[&[u8]; 2]> = (0..SIZE)
+            .step_by(chunk_size)
+            .map(|start| {
+                let end = core::cmp::min(start + chunk_size, SIZE);
+                [&storage[0][start..end], &storage[1][start..end]]
+            })
+            .collect();
+        let mut group = c.benchmark_group(format!(
+            "x86-incremental-two-streams-64KiB-{chunk_size}B-chunks"
+        ));
+        group.sample_size(20);
+        group.warm_up_time(Duration::from_millis(300));
+        group.measurement_time(Duration::from_secs(1));
+        group.throughput(Throughput::Bytes((2 * SIZE) as u64));
+        group.bench_function("md5-many", |b| {
+            b.iter(|| {
+                states.fill(Md5State::new());
+                for inputs in &chunks {
+                    engine.update_many(black_box(&mut states), black_box(inputs));
+                }
+                black_box(states)
+            })
+        });
+        group.finish();
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn bench_x86_incremental_two_streams(_c: &mut Criterion) {}
+
 #[cfg(any(target_arch = "x86", target_arch = "x86_64"))]
 fn bench_x86_incremental_lockstep(c: &mut Criterion) {
     use fearless_simd::Level;
@@ -490,6 +528,7 @@ criterion_group!(
     bench_short_one_shot,
     bench_many,
     bench_incremental_many,
+    bench_x86_incremental_two_streams,
     bench_x86_incremental_lockstep,
     bench_lane_fill,
     bench_mixed_short,
