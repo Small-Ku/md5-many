@@ -214,13 +214,73 @@ fn build_padded_block(input: &[u8], padded_blocks: usize, block_index: usize) ->
     block
 }
 
+/// Finish one lane after the paired common prefix. Intel AVX-512F/VL CPUs
+/// retain vector state across the complete residual full-block run; other x86
+/// targets preserve the existing scalar NoLEA tail.
+#[inline]
+fn compress_residual_tail(
+    state: &mut [u32; STATE_WORDS],
+    input: &[u8],
+    start_block: usize,
+    full_blocks: usize,
+    padded_blocks: usize,
+) {
+    if crate::scalar_x86_64_avx512::is_preferred() {
+        if start_block < full_blocks {
+            let count = full_blocks - start_block;
+            let start = start_block * BLOCK_SIZE;
+            // SAFETY: `full_blocks` is derived from `input.len() / 64`, so the
+            // range contains exactly `count` complete 64-byte blocks. `[u8;
+            // 64]` has byte alignment, therefore the cast adds no alignment
+            // requirement.
+            let blocks = unsafe {
+                core::slice::from_raw_parts(
+                    input.as_ptr().add(start).cast::<[u8; BLOCK_SIZE]>(),
+                    count,
+                )
+            };
+            // SAFETY: `is_preferred()` verifies AVX-512F/VL on genuine Intel.
+            unsafe { crate::scalar_x86_64_avx512::compress_blocks(state, blocks) };
+        }
+
+        let padding_start = core::cmp::max(start_block, full_blocks);
+        if padding_start < padded_blocks {
+            let mut padding = [[0u8; BLOCK_SIZE]; 2];
+            let count = padded_blocks - padding_start;
+            debug_assert!(count <= 2);
+            for (slot, block_index) in padding[..count]
+                .iter_mut()
+                .zip(padding_start..padded_blocks)
+            {
+                *slot = build_padded_block(input, padded_blocks, block_index);
+            }
+            // SAFETY: feature support was checked above.
+            unsafe { crate::scalar_x86_64_avx512::compress_blocks(state, &padding[..count]) };
+        }
+        return;
+    }
+
+    for block_index in start_block..padded_blocks {
+        if block_index < full_blocks {
+            let offset = block_index * BLOCK_SIZE;
+            let block: &[u8; BLOCK_SIZE] = input[offset..offset + BLOCK_SIZE]
+                .try_into()
+                .expect("full MD5 block");
+            crate::scalar_x86_64::compress_block(state, block);
+        } else {
+            let block = build_padded_block(input, padded_blocks, block_index);
+            crate::scalar_x86_64::compress_block(state, &block);
+        }
+    }
+}
+
 /// Hash exactly two independent messages by pairing every compression block
-/// that exists in both streams, then finishing any longer tail scalar.
+/// that exists in both streams, then finishing any longer tail with the
+/// preferred single-stream compressor for the current x86 CPU.
 ///
 /// # Safety
 ///
 /// The caller must ensure BMI1 is available on the current CPU.
-#[inline]
 #[target_feature(enable = "bmi1")]
 pub(crate) unsafe fn hash_pair_bmi1(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
     let full_blocks = [inputs[0].len() / BLOCK_SIZE, inputs[1].len() / BLOCK_SIZE];
@@ -252,17 +312,14 @@ pub(crate) unsafe fn hash_pair_bmi1(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
     }
 
     for lane in 0..2 {
-        for block_index in paired_total..padded_blocks[lane] {
-            if block_index < full_blocks[lane] {
-                let offset = block_index * BLOCK_SIZE;
-                let block: &[u8; BLOCK_SIZE] = inputs[lane][offset..offset + BLOCK_SIZE]
-                    .try_into()
-                    .expect("full MD5 block");
-                crate::scalar_x86_64::compress_block(&mut states[lane], block);
-            } else {
-                let block = build_padded_block(inputs[lane], padded_blocks[lane], block_index);
-                crate::scalar_x86_64::compress_block(&mut states[lane], &block);
-            }
+        if paired_total < padded_blocks[lane] {
+            compress_residual_tail(
+                &mut states[lane],
+                inputs[lane],
+                paired_total,
+                full_blocks[lane],
+                padded_blocks[lane],
+            );
         }
     }
 

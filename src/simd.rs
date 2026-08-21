@@ -127,7 +127,7 @@ const fn intel_cf_prefer_zmm_small_equal_len(len: usize) -> bool {
 
 #[cfg(all(test, any(target_arch = "x86", target_arch = "x86_64")))]
 mod x86_tuning_tests {
-    use super::intel_cf_prefer_zmm_small_equal_len;
+    use super::{X86TuningClass, dual_scalar_pair_profitable, intel_cf_prefer_zmm_small_equal_len};
 
     #[test]
     fn intel_cf_small_equal_crossover_boundaries_are_explicit() {
@@ -137,6 +137,87 @@ mod x86_tuning_tests {
         for len in [128, 192, 256, 320, 384, 448, 512, 513, 1024] {
             assert!(intel_cf_prefer_zmm_small_equal_len(len), "len={len}");
         }
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    #[test]
+    fn dual_scalar_pair_policy_separates_intel_equal_from_amd_skew() {
+        use X86TuningClass::{AmdFamily19h, Generic, IntelFamily06ModelCf};
+
+        for len in [0, 1, 55, 56, 64, 128, 512, 1024, 65_536] {
+            assert!(dual_scalar_pair_profitable(
+                IntelFamily06ModelCf,
+                len,
+                len,
+                false
+            ));
+        }
+        // Tiny mixed pairs stay dual-GPR even when their relative skew is
+        // large, while the measured extreme-skew middle region stays SIMD.
+        assert!(dual_scalar_pair_profitable(
+            IntelFamily06ModelCf,
+            64,
+            128,
+            false
+        ));
+        assert!(dual_scalar_pair_profitable(
+            IntelFamily06ModelCf,
+            55,
+            1984,
+            false
+        ));
+        assert!(!dual_scalar_pair_profitable(
+            IntelFamily06ModelCf,
+            55,
+            2048,
+            true
+        ));
+        assert!(!dual_scalar_pair_profitable(
+            IntelFamily06ModelCf,
+            256,
+            65_536,
+            true
+        ));
+        // Once both lanes are at least 512 B, the hybrid dual/AVX-512-tail
+        // path remains profitable even with a very long residual tail.
+        assert!(dual_scalar_pair_profitable(
+            IntelFamily06ModelCf,
+            512,
+            65_536,
+            true
+        ));
+        assert!(dual_scalar_pair_profitable(
+            IntelFamily06ModelCf,
+            512,
+            1_048_576,
+            true
+        ));
+        assert!(!dual_scalar_pair_profitable(
+            IntelFamily06ModelCf,
+            512,
+            1_048_576,
+            false
+        ));
+        assert!(!dual_scalar_pair_profitable(Generic, 1024, 1024, false));
+
+        assert!(!dual_scalar_pair_profitable(
+            AmdFamily19h,
+            64,
+            65_536,
+            false
+        ));
+        assert!(dual_scalar_pair_profitable(
+            AmdFamily19h,
+            4096,
+            65_536,
+            false
+        ));
+        assert!(!dual_scalar_pair_profitable(
+            AmdFamily19h,
+            2048,
+            65_536,
+            false
+        ));
     }
 }
 
@@ -165,15 +246,44 @@ fn x86_has_bmi1() -> bool {
     available
 }
 
+#[cfg(all(feature = "bench-internals", target_arch = "x86_64"))]
+pub(crate) fn x86_bmi1_supported_for_bench() -> bool {
+    x86_has_bmi1()
+}
+
 #[cfg(target_arch = "x86_64")]
 #[inline]
-fn prefer_dual_scalar_pair(inputs: &[&[u8]]) -> bool {
-    if !amd_family_19h() || !x86_has_bmi1() || inputs.len() != 2 {
+fn dual_scalar_pair_profitable(
+    class: X86TuningClass,
+    len0: usize,
+    len1: usize,
+    intel_avx512_tail: bool,
+) -> bool {
+    if class == X86TuningClass::IntelFamily06ModelCf {
+        if len0 == len1 {
+            return true;
+        }
+
+        let blocks0 = padded_blocks_for_len(len0);
+        let blocks1 = padded_blocks_for_len(len1);
+        let max_blocks = core::cmp::max(blocks0, blocks1);
+
+        // Xeon Platinum 8573C measurements show two robust mixed-pair
+        // regions. Tiny pairs amortize the dual-GPR setup while avoiding
+        // sparse SIMD even under substantial skew. Once both messages reach
+        // 512 bytes, sparse padded AVX-512 is again much more expensive than
+        // dual common-prefix work followed by an AVX-512 single-stream tail.
+        // Keep the remaining extreme-skew middle region on the existing SIMD
+        // path: e.g. 0..256 B versus 64 KiB is neutral-to-slower even after
+        // the AVX-512 residual-tail improvement.
+        return max_blocks <= 32 || (intel_avx512_tail && core::cmp::min(len0, len1) >= 512);
+    }
+    if class != X86TuningClass::AmdFamily19h {
         return false;
     }
 
-    let blocks0 = padded_blocks_for_len(inputs[0].len());
-    let blocks1 = padded_blocks_for_len(inputs[1].len());
+    let blocks0 = padded_blocks_for_len(len0);
+    let blocks1 = padded_blocks_for_len(len1);
     let min_blocks = core::cmp::min(blocks0, blocks1);
     let max_blocks = core::cmp::max(blocks0, blocks1);
 
@@ -182,6 +292,19 @@ fn prefer_dual_scalar_pair(inputs: &[&[u8]]) -> bool {
     // more extreme skew leaves too little work to overlap before the long lane
     // falls back to the ordinary scalar compressor.
     max_blocks <= 32 || min_blocks.saturating_mul(16) >= max_blocks
+}
+
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn prefer_dual_scalar_pair(inputs: &[&[u8]]) -> bool {
+    inputs.len() == 2
+        && x86_has_bmi1()
+        && dual_scalar_pair_profitable(
+            x86_tuning_class(),
+            inputs[0].len(),
+            inputs[1].len(),
+            crate::scalar_x86_64_avx512::is_preferred(),
+        )
 }
 
 #[cfg(target_arch = "x86_64")]

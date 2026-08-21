@@ -44,6 +44,49 @@ fn bench_aligned_framing(c: &mut Criterion) {
 }
 
 #[cfg(target_arch = "x86_64")]
+fn bench_x86_dual_bmi1(c: &mut Criterion) {
+    use md5_many::bench_internals::md5_x86_dual_bmi1;
+
+    if !std::is_x86_feature_detected!("bmi1") {
+        return;
+    }
+
+    let engine = md5_many::Md5Many::new();
+    for &(left, right) in &[
+        (55usize, 55usize),
+        (64, 64),
+        (512, 512),
+        (1024, 1024),
+        (65_536, 65_536),
+        (64, 128),
+        (1024, 4096),
+        (64, 65_536),
+    ] {
+        let storage = [vec![0x31; left], vec![0xa7; right]];
+        let inputs = [storage[0].as_slice(), storage[1].as_slice()];
+        let mut outputs = [[0u8; 16]; 2];
+        let mut group = c.benchmark_group(format!("backend-x86-dual-bmi1-{left}-{right}"));
+        group.sample_size(20);
+        group.warm_up_time(Duration::from_millis(200));
+        group.measurement_time(Duration::from_millis(600));
+        group.throughput(Throughput::Bytes((left + right) as u64));
+        group.bench_function("production", |b| {
+            b.iter(|| {
+                engine.hash_many(black_box(&inputs), black_box(&mut outputs));
+                black_box(outputs)
+            })
+        });
+        group.bench_function("forced-dual-bmi1", |b| {
+            b.iter(|| black_box(md5_x86_dual_bmi1(black_box(inputs))))
+        });
+        group.finish();
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn bench_x86_dual_bmi1(_c: &mut Criterion) {}
+
+#[cfg(target_arch = "x86_64")]
 fn bench_x86_avx512_short(c: &mut Criterion) {
     use md5_many::bench_internals::{md5_x86_avx512, md5_x86_avx512_generic, x86_avx512_supported};
 
@@ -508,6 +551,7 @@ criterion_group!(
     benches,
     bench_short_framing,
     bench_aligned_framing,
+    bench_x86_dual_bmi1,
     bench_x86_avx512_short,
     bench_x86_single_stream,
     bench_x86_dispatch_once,

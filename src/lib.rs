@@ -207,6 +207,19 @@ pub mod bench_internals {
         crate::scalar_x86_64_avx512::is_supported()
     }
 
+    /// Force the x86-64 BMI1 dual-GPR two-message backend.
+    ///
+    /// # Panics
+    ///
+    /// Panics when BMI1 is unavailable.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn md5_x86_dual_bmi1(inputs: [&[u8]; 2]) -> [Md5Digest; 2] {
+        assert!(crate::simd::x86_bmi1_supported_for_bench());
+        // SAFETY: the cached CPUID assertion above verifies BMI1.
+        unsafe { crate::scalar_x86_64_dual::hash_pair_bmi1(inputs) }
+    }
+
     /// Force the x86-64 NoLEA scalar single-stream backend.
     #[cfg(target_arch = "x86_64")]
     #[must_use]

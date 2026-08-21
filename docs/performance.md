@@ -181,6 +181,35 @@ shortest message must be at least 512 B.
 CPU is measured directly. The `x86-small-batch-*` Criterion groups exist to
 protect this crossover.
 
+### Intel family 6/model `0xCF` two-message dual-GPR path
+
+The same Xeon Platinum 8573C exposed a second low-occupancy exception that is
+not visible from SIMD width alone. The existing BMI1 dual-GPR compressor,
+originally enabled only for AMD family 19h, was measured against the production
+two-message scheduler. For exactly two equal messages it won from the one-block
+case through 64 KiB: tiny inputs commonly improved by roughly 30-50%, while
+512 B through 64 KiB still showed representative gains of roughly 6-15%.
+Splitting 3-8-message batches into dual-GPR pairs did not generalize; SIMD wins
+again once a third independent message is present.
+
+Mixed pairs require two regions rather than a simple skew ratio. With an
+AVX-512 residual-tail helper, pairs whose largest message occupies at most 32
+padded MD5 blocks remain profitable even at large relative skew. At larger
+absolute sizes, enabling dual-GPR when both messages are at least 512 B is much
+more important: with a 64 KiB long lane, moving the residual tail from NoLEA to
+AVX-512 changed the 0-256 B extreme-skew cases from roughly 9-24% regressions to
+within about +/-1.5%, while the 512 B / 64 KiB pair improved by about 31%. With
+a 1 MiB long lane, short lanes from 512 B through 256 KiB improved by roughly
+26-33%. Extreme-skew pairs below the 512 B short-lane boundary remain on the
+existing SIMD path because the hybrid backend is only neutral there.
+
+**Scheduler consequence:** on measured family 6/model `0xCF` CPUs with BMI1,
+exactly two equal messages use dual-GPR. Mixed pairs use dual-GPR when the
+larger message has at most 32 padded blocks, or when both messages are at least
+512 B and Intel AVX-512F/VL is available for the residual tail. Other mixed
+pairs retain the existing SIMD scheduler. AMD family 19h keeps its separately
+measured tiny/1:16 policy and does not take the Intel AVX-512-tail rule.
+
 ### Incremental eight-stream AVX2 on Intel Xeon Platinum 8370C
 
 Incremental multi-stream hashing was measured on an Intel Xeon Platinum 8370C

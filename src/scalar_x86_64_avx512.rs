@@ -350,7 +350,6 @@ pub(crate) unsafe fn compress_block(state: &mut [u32; STATE_WORDS], block: &[u8;
     *state = unsafe { vector_state_to_scalar(vector_state) };
 }
 
-#[cfg(feature = "digest")]
 #[target_feature(enable = "avx512f,avx512vl")]
 pub(crate) unsafe fn compress_blocks(state: &mut [u32; STATE_WORDS], blocks: &[[u8; BLOCK_SIZE]]) {
     let mut vector_state = unsafe { vector_state_from_scalar(state) };
@@ -417,4 +416,31 @@ pub(crate) unsafe fn hash_generic(input: &[u8]) -> [u8; 16] {
         chunk.copy_from_slice(&word.to_le_bytes());
     }
     out
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn compress_blocks_matches_scalar_from_arbitrary_state() {
+        if !super::is_supported() {
+            return;
+        }
+
+        let blocks = core::array::from_fn::<[u8; 64], 7, _>(|block| {
+            core::array::from_fn(|byte| {
+                (block as u8)
+                    .wrapping_mul(37)
+                    .wrapping_add((byte as u8).wrapping_mul(13))
+            })
+        });
+        let initial = [0x1357_9bdf, 0x2468_ace0, 0xfdb9_7531, 0xeca8_6420];
+        let mut expected = initial;
+        for block in &blocks {
+            crate::scalar_x86_64::compress_block(&mut expected, block);
+        }
+        let mut actual = initial;
+        // SAFETY: runtime feature detection above verifies AVX-512F/VL.
+        unsafe { super::compress_blocks(&mut actual, &blocks) };
+        assert_eq!(actual, expected);
+    }
 }
