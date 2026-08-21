@@ -74,6 +74,32 @@ pub mod bench_internals {
         crate::scalar::hash_short_one_block(input)
     }
 
+    /// Force the x86-64 BMI1 dual-GPR backend for exactly two messages.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn md5_x86_dual_bmi1(inputs: [&[u8]; 2]) -> [Md5Digest; 2] {
+        assert!(std::is_x86_feature_detected!("bmi1"));
+        // SAFETY: the runtime BMI1 check above proves the target feature.
+        unsafe { crate::scalar_x86_64_dual::hash_pair_bmi1(inputs) }
+    }
+
+    /// Force two independent x86-64 NoLEA scalar hashes.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn md5_x86_pair_nolea(inputs: [&[u8]; 2]) -> [Md5Digest; 2] {
+        [
+            crate::scalar::hash_x86_nolea(inputs[0]),
+            crate::scalar::hash_x86_nolea(inputs[1]),
+        ]
+    }
+
+    /// Force the x86-64 AVX2 padded two-message backend, bypassing CPU policy.
+    #[cfg(target_arch = "x86_64")]
+    #[must_use]
+    pub fn md5_x86_pair_avx2(inputs: [&[u8]; 2]) -> [Md5Digest; 2] {
+        crate::simd::bench_hash_pair_avx2(inputs)
+    }
+
     /// Force the portable Rust compressor with generic one-shot framing.
     #[must_use]
     pub fn md5_portable(input: &[u8]) -> Md5Digest {

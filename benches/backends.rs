@@ -125,6 +125,49 @@ fn bench_x86_dispatch_once(c: &mut Criterion) {
 #[cfg(not(target_arch = "x86_64"))]
 fn bench_x86_dispatch_once(_c: &mut Criterion) {}
 
+#[cfg(target_arch = "x86_64")]
+fn bench_x86_dual_pair(c: &mut Criterion) {
+    use md5_many::bench_internals::{md5_x86_dual_bmi1, md5_x86_pair_avx2, md5_x86_pair_nolea};
+
+    if !std::is_x86_feature_detected!("bmi1") || !std::is_x86_feature_detected!("avx2") {
+        return;
+    }
+
+    for &(label, len0, len1) in &[
+        ("equal-55", 55usize, 55usize),
+        ("equal-512", 512, 512),
+        ("equal-4KiB", 4 * 1024, 4 * 1024),
+        ("equal-64KiB", 64 * 1024, 64 * 1024),
+        ("equal-256KiB", 256 * 1024, 256 * 1024),
+        ("equal-1MiB", 1024 * 1024, 1024 * 1024),
+        ("skew-4K-64K", 4 * 1024, 64 * 1024),
+        ("skew-2K-64K", 2 * 1024, 64 * 1024),
+        ("skew-1K-64K", 1024, 64 * 1024),
+    ] {
+        let storage0 = vec![0x31; len0];
+        let storage1 = vec![0xa7; len1];
+        let inputs = [storage0.as_slice(), storage1.as_slice()];
+        let mut group = c.benchmark_group(format!("backend-x86-dual-pair-{label}"));
+        group.sample_size(15);
+        group.warm_up_time(Duration::from_millis(150));
+        group.measurement_time(Duration::from_millis(500));
+        group.throughput(Throughput::Bytes((len0 + len1) as u64));
+        group.bench_function("dual-bmi1", |b| {
+            b.iter(|| black_box(md5_x86_dual_bmi1(black_box(inputs))))
+        });
+        group.bench_function("scalar-nolea", |b| {
+            b.iter(|| black_box(md5_x86_pair_nolea(black_box(inputs))))
+        });
+        group.bench_function("avx2-padded", |b| {
+            b.iter(|| black_box(md5_x86_pair_avx2(black_box(inputs))))
+        });
+        group.finish();
+    }
+}
+
+#[cfg(not(target_arch = "x86_64"))]
+fn bench_x86_dual_pair(_c: &mut Criterion) {}
+
 #[cfg(all(target_arch = "aarch64", target_endian = "little"))]
 fn bench_aarch64_single_stream(c: &mut Criterion) {
     use md5_many::bench_internals::{md5_aarch64_gpr, md5_portable};
@@ -468,6 +511,7 @@ criterion_group!(
     bench_x86_avx512_short,
     bench_x86_single_stream,
     bench_x86_dispatch_once,
+    bench_x86_dual_pair,
     bench_aarch64_single_stream,
     bench_aarch64_short,
     bench_aarch64_neon4,

@@ -9744,6 +9744,22 @@ fn compress_md5_states_inner<SIMD: Simd>(simd: SIMD, streams: &mut [Md5State], i
 }
 
 #[inline(always)]
+#[cfg(all(feature = "bench-internals", target_arch = "x86_64"))]
+pub(crate) fn bench_hash_pair_avx2(inputs: [&[u8]; 2]) -> [[u8; 16]; 2] {
+    use fearless_simd::Level;
+
+    let Some(avx2) = Level::new().as_avx2() else {
+        panic!("AVX2 unavailable");
+    };
+    let mut outputs = [[0u8; 16]; 2];
+    if inputs[0].len() == inputs[1].len() {
+        hash_equal_len_avx2_padded(avx2, &inputs, &mut outputs);
+    } else {
+        hash_mixed_len_avx2_padded(avx2, &inputs, &mut outputs);
+    }
+    outputs
+}
+
 fn padded_blocks_for_len(len: usize) -> usize {
     let full_blocks = len / 64;
     let tail = len & 63;
