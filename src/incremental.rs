@@ -456,6 +456,63 @@ pub(crate) fn update_many_with_level(level: Level, streams: &mut [Md5State], inp
     }
 }
 
+#[cfg(target_arch = "x86_64")]
+#[inline]
+fn finalize_two_intel(streams: &[Md5State], outputs: &mut [Md5Digest]) {
+    debug_assert_eq!(streams.len(), 2);
+    debug_assert!(outputs.len() >= 2);
+
+    let mut states = [streams[0].state, streams[1].state];
+    let bytes = [streams[0].bytes, streams[1].bytes];
+    let mut first_blocks = [[0u8; 64]; 2];
+    let mut needs_second = [false; 2];
+    for lane in 0..2 {
+        let tail_len = (bytes[lane] & 63) as usize;
+        first_blocks[lane][..tail_len].copy_from_slice(&streams[lane].buffer[..tail_len]);
+        first_blocks[lane][tail_len] = 0x80;
+        let bit_len = bytes[lane].wrapping_mul(8).to_le_bytes();
+        if tail_len <= 55 {
+            first_blocks[lane][56..64].copy_from_slice(&bit_len);
+        } else {
+            needs_second[lane] = true;
+        }
+    }
+
+    // SAFETY: the caller enters this helper only after the Intel/BMI1 probe
+    // succeeds; both references are complete 64-byte MD5 blocks.
+    unsafe {
+        crate::scalar_x86_64_dual::compress_blocks_pair_bmi1(
+            &mut states,
+            [&first_blocks[0], &first_blocks[1]],
+        )
+    };
+
+    match needs_second {
+        [true, true] => {
+            let mut second_blocks = [[0u8; 64]; 2];
+            second_blocks[0][56..64].copy_from_slice(&bytes[0].wrapping_mul(8).to_le_bytes());
+            second_blocks[1][56..64].copy_from_slice(&bytes[1].wrapping_mul(8).to_le_bytes());
+            // SAFETY: same BMI1 precondition as the first block pair.
+            unsafe {
+                crate::scalar_x86_64_dual::compress_blocks_pair_bmi1(
+                    &mut states,
+                    [&second_blocks[0], &second_blocks[1]],
+                )
+            };
+        }
+        [true, false] | [false, true] => {
+            let lane = usize::from(!needs_second[0]);
+            let mut block = [0u8; 64];
+            block[56..64].copy_from_slice(&bytes[lane].wrapping_mul(8).to_le_bytes());
+            scalar::compress_block(&mut states[lane], &block);
+        }
+        [false, false] => {}
+    }
+
+    outputs[0] = scalar::state_to_bytes(states[0]);
+    outputs[1] = scalar::state_to_bytes(states[1]);
+}
+
 pub(crate) fn finalize_many_with_level(
     level: Level,
     streams: &[Md5State],
@@ -467,6 +524,12 @@ pub(crate) fn finalize_many_with_level(
     );
     let outputs = &mut outputs[..streams.len()];
     if streams.is_empty() {
+        return;
+    }
+
+    #[cfg(target_arch = "x86_64")]
+    if streams.len() == 2 && simd::intel_cf_dual_incremental_available() {
+        finalize_two_intel(streams, outputs);
         return;
     }
 
@@ -547,5 +610,41 @@ pub(crate) fn finalize_many_with_level(
             outputs[lane] = scalar::state_to_bytes(work[lane].state);
         }
         group_start = group_end;
+    }
+}
+
+#[cfg(all(test, feature = "std", target_arch = "x86_64"))]
+mod tests {
+    use super::{Md5State, finalize_two_intel};
+
+    #[test]
+    fn intel_two_stream_finalize_matches_individual_states() {
+        if !std::is_x86_feature_detected!("bmi1") {
+            return;
+        }
+
+        for &(len0, len1) in &[
+            (0usize, 0usize),
+            (1, 1),
+            (55, 55),
+            (56, 56),
+            (63, 63),
+            (64, 64),
+            (65, 65),
+            (55, 56),
+            (63, 64),
+            (64, 65),
+            (1024, 1088),
+        ] {
+            let data0 = std::vec![0x31u8; len0];
+            let data1 = std::vec![0xa7u8; len1];
+            let mut states = [Md5State::new(); 2];
+            states[0].update(&data0);
+            states[1].update(&data1);
+            let expected = [states[0].finalize(), states[1].finalize()];
+            let mut actual = [[0u8; 16]; 2];
+            finalize_two_intel(&states, &mut actual);
+            assert_eq!(actual, expected, "len0={len0}, len1={len1}");
+        }
     }
 }

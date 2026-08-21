@@ -147,6 +147,31 @@ fn bench_x86_incremental_two_streams(c: &mut Criterion) {
         });
         group.finish();
     }
+
+    for &(name, len0, len1) in &[
+        ("one-block-55", 55usize, 55usize),
+        ("two-block-56", 56, 56),
+        ("mixed-55-56", 55, 56),
+        ("aligned-1024-1088", 1024, 1088),
+    ] {
+        let data0 = vec![0x31u8; len0];
+        let data1 = vec![0xa7u8; len1];
+        let mut states = [Md5State::new(); 2];
+        states[0].update(&data0);
+        states[1].update(&data1);
+        let mut outputs = [[0u8; 16]; 2];
+        let mut group = c.benchmark_group(format!("x86-incremental-two-finalize-{name}"));
+        group.sample_size(30);
+        group.warm_up_time(Duration::from_millis(300));
+        group.measurement_time(Duration::from_secs(1));
+        group.bench_function("md5-many", |b| {
+            b.iter(|| {
+                engine.finalize_many(black_box(&states), black_box(&mut outputs));
+                black_box(outputs)
+            })
+        });
+        group.finish();
+    }
 }
 
 #[cfg(not(target_arch = "x86_64"))]

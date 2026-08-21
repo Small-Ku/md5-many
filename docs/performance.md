@@ -251,6 +251,20 @@ length divisible by 64. Partial-buffer and unequal update shapes retain the
 existing generic incremental scheduler. `x86-incremental-two-streams-*`
 Criterion groups keep the chunk-size crossover visible in future runs.
 
+Finalization had a separate low-occupancy fixed cost: the generic finalizer
+materialized work/padding/selection arrays sized for up to 48 lanes even when
+only two states were active. A dedicated Intel two-state finalizer that keeps
+only two chaining states and two padding blocks, drives paired padding blocks
+directly through the BMI1 dual compressor, and uses the preferred single-stream
+backend only for an unmatched second padding block reduced representative
+`finalize_many(2)` latency by roughly 50-69%. Examples on the same 8573C were
+about 281 -> 113 ns for empty states, 290 -> 107 ns at 55 B, 408 -> 201 ns at
+56 B, and 320 -> 113 ns around 1 KiB. It also beat two independent `finalize()`
+calls by roughly 28-41% in the measured boundary cases.
+
+`x86-incremental-two-finalize-*` Criterion groups cover one-block, two-block,
+mixed-padding, and aligned-state shapes.
+
 ### Incremental eight-stream AVX2 on Intel Xeon Platinum 8370C
 
 Incremental multi-stream hashing was measured on an Intel Xeon Platinum 8370C
